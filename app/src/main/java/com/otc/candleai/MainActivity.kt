@@ -1,18 +1,22 @@
+
 package com.otc.candleai
 
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.media.projection.MediaProjectionManager
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
-import android.os.Build
 
 class MainActivity : Activity() {
 
     private val captureRequest = 7001
+    private val overlayRequest = 7002
     private lateinit var status: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -24,27 +28,30 @@ class MainActivity : Activity() {
         }
 
         val heading = TextView(this).apply {
-            text = "OTC Candle AI"
-            textSize = 22f
+            text = "OTC CANDLE AI"
+            textSize = 24f
         }
 
         status = TextView(this).apply {
-            text = "Screen Capture চালু করতে নিচের বাটনে চাপ দিন।"
-            textSize = 16f
+            text = "Automatic Analysis প্রস্তুত"
+            textSize = 17f
             setPadding(0, 24, 0, 24)
         }
 
         val button = Button(this).apply {
-            text = "Start Screen Capture"
+            text = "START ANALYSIS"
             setOnClickListener {
-                val manager = getSystemService(
-                    Context.MEDIA_PROJECTION_SERVICE
-                ) as MediaProjectionManager
+                if (Build.VERSION.SDK_INT >= 23 &&
+                    !Settings.canDrawOverlays(this@MainActivity)) {
 
-                startActivityForResult(
-                    manager.createScreenCaptureIntent(),
-                    captureRequest
-                )
+                    val intent = Intent(
+                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:$packageName")
+                    )
+                    startActivityForResult(intent, overlayRequest)
+                } else {
+                    requestScreenCapture()
+                }
             }
         }
 
@@ -52,6 +59,17 @@ class MainActivity : Activity() {
         layout.addView(status)
         layout.addView(button)
         setContentView(layout)
+    }
+
+    private fun requestScreenCapture() {
+        val manager = getSystemService(
+            Context.MEDIA_PROJECTION_SERVICE
+        ) as MediaProjectionManager
+
+        startActivityForResult(
+            manager.createScreenCaptureIntent(),
+            captureRequest
+        )
     }
 
     @Deprecated("Deprecated by Android")
@@ -62,22 +80,38 @@ class MainActivity : Activity() {
     ) {
         super.onActivityResult(requestCode, resultCode, data)
 
+        if (requestCode == overlayRequest) {
+            if (Settings.canDrawOverlays(this)) {
+                requestScreenCapture()
+            } else {
+                status.text = "Floating Window permission দেওয়া হয়নি"
+            }
+        }
+
         if (requestCode == captureRequest) {
             if (resultCode == RESULT_OK && data != null) {
-                val serviceIntent = Intent(this, CaptureService::class.java).apply {
+
+                val captureIntent = Intent(
+                    this,
+                    CaptureService::class.java
+                ).apply {
                     putExtra("resultCode", resultCode)
                     putExtra("data", data)
                 }
 
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    startForegroundService(serviceIntent)
+                if (Build.VERSION.SDK_INT >= 26) {
+                    startForegroundService(captureIntent)
                 } else {
-                    startService(serviceIntent)
+                    startService(captureIntent)
                 }
 
-                status.text = "Screen Capture চালু করার অনুরোধ পাঠানো হয়েছে।"
+                startService(
+                    Intent(this, FloatingWindowService::class.java)
+                )
+
+                status.text = "Floating Panel চালু করার অনুরোধ পাঠানো হয়েছে।"
             } else {
-                status.text = "Screen Capture অনুমতি পাওয়া যায়নি।"
+                status.text = "Screen Capture অনুমতি পাওয়া যায়নি"
             }
         }
     }
