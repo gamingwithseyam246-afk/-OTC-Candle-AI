@@ -1,4 +1,4 @@
-package com.example.otccandleai
+package package com.otc.candleai
 
 import android.app.Activity
 import android.content.Context
