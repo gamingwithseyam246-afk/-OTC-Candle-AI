@@ -3,7 +3,7 @@ package com.otc.candleai
 import android.app.*
 import android.content.Intent
 import android.media.ImageReader
-import android.media.projection.MediaProjection
+im android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.hardware.disp.DisplayManager
 import android.hardware.display.VirtualDisplay
