@@ -1,7 +1,10 @@
 package com.otc.candleai
 
 import android.app.Service
-import android.content.Inte
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.os.Build
@@ -10,7 +13,7 @@ import android.provider.Settings
 import android.view.Gravity
 import android.view.WindowManager
 import android.widget.LinearLayout
-import android.widgetxtView
+import android.widget.TextView
 
 class FloatingWindowService : Service() {
 
