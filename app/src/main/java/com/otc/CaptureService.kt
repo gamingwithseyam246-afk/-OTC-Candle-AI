@@ -1,7 +1,7 @@
 package com.otc.candleai
 
 import android.app.*
-import android.content.Intent
+import android.content.I
 import android.media.ImageReader
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
