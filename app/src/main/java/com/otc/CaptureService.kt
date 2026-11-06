@@ -3,14 +3,13 @@ package com.otc.candleai
 import android.app.*
 import android.content.Intent
 import android.media.ImageReader
-im android.media.projection.MediaProjection
+import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
-import android.hardware.disp.DisplayManager
+import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.os.IBinder
 import android.os.Build
 import android.os.Handler
-import android.os.Looper
 
 class CaptureService : Service() {
     private var projection: MediaProjection? = null
