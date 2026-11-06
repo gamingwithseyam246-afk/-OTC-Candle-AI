@@ -5,7 +5,7 @@ import android.content.Intent
 import android.media.ImageReader
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
-import android.hardware.display.DisplayManager
+import android.hardware.disp.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.os.IBinder
 import android.os.Build
