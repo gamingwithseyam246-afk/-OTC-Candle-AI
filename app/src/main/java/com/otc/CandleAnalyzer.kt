@@ -9,7 +9,7 @@ data class CandleSignal(
     val confidence: Int,
     val greenCount: Int,
     val redCount:
-    val message: Strin
+    val message: String
 
 object CandleAnalyzer {
 
