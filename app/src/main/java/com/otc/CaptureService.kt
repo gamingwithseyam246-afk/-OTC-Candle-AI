@@ -133,12 +133,4 @@ class CaptureService : Service() {
     }
 
     override fun onDestroy() {
-        display?.release()
-        reader?.close()
-        projection?.stop()
-        worker?.quitSafely()
-        super.onDestroy()
-    }
-
-    override fun onBind(intent: Intent?): IBinder? = null
-}
+        displa
