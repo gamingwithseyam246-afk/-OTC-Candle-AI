@@ -133,4 +133,29 @@ class CaptureService : Service() {
     }
 
     override fun onDestroy() {
-        displa
+        override fun onDestroy() {
+        display?.release()
+        display = null
+
+        reader?.setOnImageAvailableListener(null, null)
+        reader?.close()
+        reader = null
+
+        projectionCallback?.let { callback ->
+            projection?.unregisterCallback(callback)
+        }
+        projectionCallback = null
+
+        projection?.stop()
+        projection = null
+
+        worker?.quitSafely()
+        worker = null
+
+        super.onDestroy()
+    }
+
+    override fun onBind(intent: Intent?): IBinder? {
+        return null
+    }
+}
