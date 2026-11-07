@@ -8,8 +8,9 @@ data class CandleSignal(
     val signal: String,
     val confidence: Int,
     val greenCount: Int,
-    val redCount:
+    val redCount: Int,
     val message: String
+)
 
 object CandleAnalyzer {
 
