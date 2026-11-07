@@ -65,7 +65,7 @@ object CandleAnalyzer {
                 "WAIT", 0,
                 bars.count { it.green > it.red },
                 bars.count { it.red > it.green },
-                "পর্যাপ্ত ক্যান্ডেল শনাক্ত হয়নি"
+                "পর্যাপ্ত ক্যান্ডেল শনাক্ত হয়নি: ${bars.size}টি পাওয়া গেছে"
             )
         }
 
