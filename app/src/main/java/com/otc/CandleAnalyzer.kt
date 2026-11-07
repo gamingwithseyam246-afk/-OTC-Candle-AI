@@ -133,7 +133,7 @@ object CandleAnalyzer {
         val body = current.body.coerceAtLeast(1)
 
         // Small body / Doji
-        if (current.body <= maxOf(2, current.range * 0.12)) {
+        if (current.body <= maxOf(2, (current.range * 0.12).toInt())) {
             return "Doji"
         }
 
