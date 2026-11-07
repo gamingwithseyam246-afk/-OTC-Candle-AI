@@ -1,4 +1,5 @@
 
+
 package com.otc.candleai
 
 import android.graphics.Bitmap
@@ -17,47 +18,43 @@ object CandleAnalyzer {
 
     private data class Bar(
         val green: Int,
-        val red: Int
+        val red: Int,
+        val body: Int,
+        val wick: Int,
+        val centerY: Int
     )
 
     fun analyze(bitmap: Bitmap): CandleSignal {
         val bars = mutableListOf<Bar>()
 
-        val left = (bitmap.width * 0.08).toInt()
-        val right = (bitmap.width * 0.68).toInt()
+        val left = (bitmap.width * 0.01).toInt()
+        val right = (bitmap.width * 0.58).toInt()
         val top = (bitmap.height * 0.08).toInt()
         val bottom = (bitmap.height * 0.72).toInt()
 
-        val active = mutableListOf<Int>()
-        var lastActive = -10
+        val groups = mutableListOf<Int>()
+        var lastX = -10
 
         for (x in left until right) {
             var count = 0
 
             for (y in top until bottom) {
                 val c = bitmap.getPixel(x, y)
-                val r = Color.red(c)
-                val g = Color.green(c)
-                val b = Color.blue(c)
-
-                if (isGreen(r, g, b) || isRed(r, g, b)) {
-                    count++
-                }
+                if (isCandle(c)) count++
             }
 
-            if (count >= 1) {
-                if (x - lastActive > 3 && active.isNotEmpty()) {
-                    addBar(active, bitmap, bars, top, bottom)
-                    active.clear()
+            if (count >= 5) {
+                if (groups.isNotEmpty() && x - lastX > 2) {
+                    addBar(groups, bitmap, bars, top, bottom)
+                    groups.clear()
                 }
-
-                active.add(x)
-                lastActive = x
+                groups.add(x)
+                lastX = x
             }
         }
 
-        if (active.isNotEmpty()) {
-            addBar(active, bitmap, bars, top, bottom)
+        if (groups.isNotEmpty()) {
+            addBar(groups, bitmap, bars, top, bottom)
         }
 
         if (bars.size < 5) {
@@ -65,7 +62,7 @@ object CandleAnalyzer {
                 "WAIT", 0,
                 bars.count { it.green > it.red },
                 bars.count { it.red > it.green },
-                "পর্যাপ্ত ক্যান্ডেল শনাক্ত হয়নি: ${bars.size}টি পাওয়া গেছে"
+                "ক্যান্ডেল পাওয়া গেছে: ${bars.size}টি"
             )
         }
 
@@ -78,16 +75,21 @@ object CandleAnalyzer {
 
         recent.forEachIndexed { index, bar ->
             val weight = index + 1
+
             if (bar.green > bar.red) up += weight
             if (bar.red > bar.green) down += weight
+
+            if (bar.body > 0 && bar.wick > bar.body * 2) {
+                up -= 0
+                down -= 0
+            }
         }
 
         val total = up + down
-
         if (total == 0) {
             return CandleSignal(
                 "WAIT", 0, green, red,
-                "স্পষ্ট দিক পাওয়া যায়নি"
+                "স্পষ্ট Trend পাওয়া যায়নি"
             )
         }
 
@@ -100,12 +102,22 @@ object CandleAnalyzer {
         }
 
         val message = when (signal) {
-            "UP" -> "আগের ক্যান্ডেলে ঊর্ধ্বমুখী ধারা"
-            "DOWN" -> "আগের ক্যান্ডেলে নিম্নমুখী ধারা"
-            else -> "স্পষ্ট ধারা নেই - অপেক্ষা করুন"
+            "UP" -> "সবুজ ক্যান্ডেলের ধারা বেশি"
+            "DOWN" -> "লাল ক্যান্ডেলের ধারা বেশি"
+            else -> "স্পষ্ট দিক নেই - অপেক্ষা করুন"
         }
 
-        return CandleSignal(signal, score, green, red, message)
+        return CandleSignal(
+            signal, score, green, red, message
+        )
+    }
+
+    private fun isCandle(color: Int): Boolean {
+        val r = Color.red(color)
+        val g = Color.green(color)
+        val b = Color.blue(color)
+
+        return isGreen(r, g, b) || isRed(r, g, b)
     }
 
     private fun isGreen(r: Int, g: Int, b: Int): Boolean {
@@ -127,11 +139,15 @@ object CandleAnalyzer {
 
         val first = columns.first()
         val last = columns.last()
+        val width = last - first + 1
 
-        if (last - first > 25) return
+        if (width > 24) return
 
+        val rowCounts = mutableMapOf<Int, Int>()
         var green = 0
         var red = 0
+        var minY = bottom
+        var maxY = top
 
         for (x in first..last) {
             for (y in top until bottom) {
@@ -140,13 +156,33 @@ object CandleAnalyzer {
                 val g = Color.green(c)
                 val b = Color.blue(c)
 
-                if (isGreen(r, g, b)) green++
-                else if (isRed(r, g, b)) red++
+                if (isGreen(r, g, b)) {
+                    green++
+                    rowCounts[y] = (rowCounts[y] ?: 0) + 1
+                    minY = minOf(minY, y)
+                    maxY = maxOf(maxY, y)
+                } else if (isRed(r, g, b)) {
+                    red++
+                    rowCounts[y] = (rowCounts[y] ?: 0) + 1
+                    minY = minOf(minY, y)
+                    maxY = maxOf(maxY, y)
+                }
             }
         }
 
-        if (green + red >= 4) {
-            bars.add(Bar(green, red))
-        }
+        if (green + red < 8 || minY >= maxY) return
+
+        val bodyRows = rowCounts.filter {
+            it.value >= maxOf(2, width / 3)
+        }.keys
+
+        val body = if (bodyRows.isEmpty()) 0
+            else bodyRows.max() - bodyRows.min()
+
+        val wick = (maxY - minY - body).coerceAtLeast(0)
+
+        bars.add(
+            Bar(green, red, body, wick, (minY + maxY) / 2)
+        )
     }
 }
