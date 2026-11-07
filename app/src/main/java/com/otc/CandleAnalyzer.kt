@@ -1,5 +1,7 @@
 
 
+
+
 package com.otc.candleai
 
 import android.graphics.Bitmap
@@ -17,172 +19,214 @@ data class CandleSignal(
 object CandleAnalyzer {
 
     private data class Bar(
-        val green: Int,
-        val red: Int,
+        val bullish: Boolean,
         val body: Int,
-        val wick: Int,
-        val centerY: Int
+        val upperWick: Int,
+        val lowerWick: Int,
+        val centerX: Int,
+        val closeY: Int
     )
 
+    private fun colorType(c: Int): Int {
+        val r = Color.red(c)
+        val g = Color.green(c)
+        val b = Color.blue(c)
+
+        // Red bearish candle
+        if (r > 100 && r > g * 1.25 &&
+            r > b * 1.15) return 2
+
+        // Green bullish candle
+        if (g > 90 && g > r * 1.20 &&
+            g > b * 1.08) return 1
+
+        // White bullish candle on dark chart
+        if (r > 180 && g > 180 && b > 180) return 1
+
+        return 0
+    }
+
     fun analyze(bitmap: Bitmap): CandleSignal {
-        val bars = mutableListOf<Bar>()
+        val bars = detectCandles(bitmap).takeLast(10)
 
-        val left = (bitmap.width * 0.01).toInt()
-        val right = (bitmap.width * 0.58).toInt()
-        val top = (bitmap.height * 0.08).toInt()
-        val bottom = (bitmap.height * 0.72).toInt()
-
-        val groups = mutableListOf<Int>()
-        var lastX = -10
-
-        for (x in left until right) {
-            var count = 0
-
-            for (y in top until bottom) {
-                val c = bitmap.getPixel(x, y)
-                if (isCandle(c)) count++
-            }
-
-            if (count >= 5) {
-                if (groups.isNotEmpty() && x - lastX > 2) {
-                    addBar(groups, bitmap, bars, top, bottom)
-                    groups.clear()
-                }
-                groups.add(x)
-                lastX = x
-            }
-        }
-
-        if (groups.isNotEmpty()) {
-            addBar(groups, bitmap, bars, top, bottom)
-        }
+        val green = bars.count { it.bullish }
+        val red = bars.size - green
 
         if (bars.size < 5) {
             return CandleSignal(
-                "WAIT", 0,
-                bars.count { it.green > it.red },
-                bars.count { it.red > it.green },
+                "WAIT", 0, green, red,
                 "ক্যান্ডেল পাওয়া গেছে: ${bars.size}টি"
             )
         }
 
-        val recent = bars.takeLast(10)
-        val green = recent.count { it.green > it.red }
-        val red = recent.count { it.red > it.green }
+        var score = 0
 
-        var up = 0
-        var down = 0
-
-        recent.forEachIndexed { index, bar ->
+        bars.forEachIndexed { index, bar ->
             val weight = index + 1
 
-            if (bar.green > bar.red) up += weight
-            if (bar.red > bar.green) down += weight
+            // Candle body direction
+            score += if (bar.bullish) weight else -weight
 
-            if (bar.body > 0 && bar.wick > bar.body * 2) {
-                up -= 0
-                down -= 0
-            }
-        }
+            // Wick rejection analysis
+            val wickTotal = bar.upperWick + bar.lowerWick
+            if (wickTotal > 0) {
+                val wickScore =
+                    (abs(bar.lowerWick - bar.upperWick) *
+                        weight / (wickTotal + bar.body + 1))
+                        .coerceAtMost(3)
 
-        val total = up + down
-        if (total == 0) {
-            return CandleSignal(
-                "WAIT", 0, green, red,
-                "স্পষ্ট Trend পাওয়া যায়নি"
-            )
-        }
-
-        val score = abs(up - down) * 100 / total
-
-        val signal = when {
-            score < 25 -> "WAIT"
-            up > down -> "UP"
-            else -> "DOWN"
-        }
-
-        val message = when (signal) {
-            "UP" -> "সবুজ ক্যান্ডেলের ধারা বেশি"
-            "DOWN" -> "লাল ক্যান্ডেলের ধারা বেশি"
-            else -> "স্পষ্ট দিক নেই - অপেক্ষা করুন"
-        }
-
-        return CandleSignal(
-            signal, score, green, red, message
-        )
-    }
-
-    private fun isCandle(color: Int): Boolean {
-        val r = Color.red(color)
-        val g = Color.green(color)
-        val b = Color.blue(color)
-
-        return isGreen(r, g, b) || isRed(r, g, b)
-    }
-
-    private fun isGreen(r: Int, g: Int, b: Int): Boolean {
-        return g > 70 && g > r * 1.20 && g > b * 1.08
-    }
-
-    private fun isRed(r: Int, g: Int, b: Int): Boolean {
-        return r > 70 && r > g * 1.20 && r > b * 1.08
-    }
-
-    private fun addBar(
-        columns: List<Int>,
-        bitmap: Bitmap,
-        bars: MutableList<Bar>,
-        top: Int,
-        bottom: Int
-    ) {
-        if (columns.isEmpty()) return
-
-        val first = columns.first()
-        val last = columns.last()
-        val width = last - first + 1
-
-        if (width > 24) return
-
-        val rowCounts = mutableMapOf<Int, Int>()
-        var green = 0
-        var red = 0
-        var minY = bottom
-        var maxY = top
-
-        for (x in first..last) {
-            for (y in top until bottom) {
-                val c = bitmap.getPixel(x, y)
-                val r = Color.red(c)
-                val g = Color.green(c)
-                val b = Color.blue(c)
-
-                if (isGreen(r, g, b)) {
-                    green++
-                    rowCounts[y] = (rowCounts[y] ?: 0) + 1
-                    minY = minOf(minY, y)
-                    maxY = maxOf(maxY, y)
-                } else if (isRed(r, g, b)) {
-                    red++
-                    rowCounts[y] = (rowCounts[y] ?: 0) + 1
-                    minY = minOf(minY, y)
-                    maxY = maxOf(maxY, y)
+                if (bar.lowerWick > bar.upperWick) {
+                    score += wickScore
+                } else if (bar.upperWick > bar.lowerWick) {
+                    score -= wickScore
                 }
             }
         }
 
-        if (green + red < 8 || minY >= maxY) return
+        // Screen trend: smaller Y is higher on screen
+        val trend = bars.first().closeY - bars.last().closeY
 
-        val bodyRows = rowCounts.filter {
-            it.value >= maxOf(2, width / 3)
-        }.keys
+        if (trend > 3) score += 5
+        if (trend < -3) score -= 5
 
-        val body = if (bodyRows.isEmpty()) 0
-            else bodyRows.max() - bodyRows.min()
+        val confidence =
+            (abs(score) * 100 / 65).coerceIn(0, 100)
 
-        val wick = (maxY - minY - body).coerceAtLeast(0)
+        val signal = when {
+            confidence < 20 -> "WAIT"
+            score > 0 -> "UP"
+            else -> "DOWN"
+        }
 
-        bars.add(
-            Bar(green, red, body, wick, (minY + maxY) / 2)
+        val message = when (signal) {
+            "UP" -> "ঊর্ধ্বমুখী Body ও Wick ধারা"
+            "DOWN" -> "নিম্নমুখী Body ও Wick ধারা"
+            else -> "স্পষ্ট দিক নেই - অপেক্ষা করুন"
+        }
+
+        return CandleSignal(
+            signal, confidence, green, red, message
         )
+    }
+
+    private fun detectCandles(bitmap: Bitmap): List<Bar> {
+        val left = (bitmap.width * 0.01).toInt()
+        val right = (bitmap.width * 0.60).toInt()
+        val top = (bitmap.height * 0.13).toInt()
+        val bottom = (bitmap.height * 0.72).toInt()
+
+        val width = right - left
+        val height = bottom - top
+
+        if (width <= 0 || height <= 0) return emptyList()
+
+        val visited = BooleanArray(width * height)
+        val queue = IntArray(width * height)
+        val result = mutableListOf<Bar>()
+
+        fun typeAt(x: Int, y: Int): Int {
+            return colorType(bitmap.getPixel(x + left, y + top))
+        }
+
+        for (y in 0 until height) {
+            for (x in 0 until width) {
+                val start = y * width + x
+
+                if (visited[start]) continue
+
+                val type = typeAt(x, y)
+                if (type == 0) continue
+
+                var head = 0
+                var tail = 0
+
+                queue[tail++] = start
+                visited[start] = true
+
+                var minX = x
+                var maxX = x
+                var minY = y
+                var maxY = y
+                var pixels = 0
+
+                val rowCounts = IntArray(height)
+
+                while (head < tail) {
+                    val current = queue[head++]
+                    val cx = current % width
+                    val cy = current / width
+
+                    pixels++
+                    minX = minOf(minX, cx)
+                    maxX = maxOf(maxX, cx)
+                    minY = minOf(minY, cy)
+                    maxY = maxOf(maxY, cy)
+                    rowCounts[cy]++
+
+                    for (dy in -1..1) {
+                        for (dx in -1..1) {
+                            if (dx == 0 && dy == 0) continue
+
+                            val nx = cx + dx
+                            val ny = cy + dy
+
+                            if (nx !in 0 until width ||
+                                ny !in 0 until height) continue
+
+                            val next = ny * width + nx
+
+                            if (!visited[next] &&
+                                typeAt(nx, ny) == type) {
+                                visited[next] = true
+                                queue[tail++] = next
+                            }
+                        }
+                    }
+                }
+
+                val candleWidth = maxX - minX + 1
+                val candleHeight = maxY - minY + 1
+
+                if (pixels < 8 ||
+                    candleWidth > 25 ||
+                    candleHeight < 6) continue
+
+                val threshold = maxOf(2, candleWidth / 3)
+                var bodyTop = -1
+                var bodyBottom = -1
+
+                for (row in minY..maxY) {
+                    if (rowCounts[row] >= threshold) {
+                        if (bodyTop == -1) bodyTop = row
+                        bodyBottom = row
+                    }
+                }
+
+                if (bodyTop == -1 ||
+                    bodyBottom <= bodyTop) continue
+
+                val body = bodyBottom - bodyTop + 1
+                val upperWick = bodyTop - minY
+                val lowerWick = maxY - bodyBottom
+
+                result.add(
+                    Bar(
+                        bullish = type == 1,
+                        body = body,
+                        upperWick = upperWick,
+                        lowerWick = lowerWick,
+                        centerX = (minX + maxX) / 2,
+                        closeY = if (type == 1) {
+                            bodyTop
+                        } else {
+                            bodyBottom
+                        }
+                    )
+                )
+            }
+        }
+
+        // Oldest candle to newest candle
+        return result.sortedBy { it.centerX }
     }
 }
