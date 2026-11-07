@@ -1,0 +1,317 @@
+ 
+package com.otc.candleai
+
+import kotlin.math.abs
+
+data class AdvancedCandle(
+    val open: Double,
+    val high: Double,
+    val low: Double,
+    val close: Double
+)
+
+data class SwingPoint(
+    val index: Int,
+    val price: Double,
+    val type: String
+)
+
+data class AdvancedSignal(
+    val signal: String,
+    val confidence: Int,
+    val trend: String,
+    val structure: String,
+    val bos: String,
+    val choch: String,
+    val liquidity: String,
+    val support: Double?,
+    val resistance: Double?,
+    val swingHighs: List<SwingPoint>,
+    val swingLows: List<SwingPoint>,
+    val message: String
+)
+
+object AdvancedCandleAnalyzer {
+
+    private const val MAX_CANDLES = 50
+    private const val PIVOT_RADIUS = 2
+
+    fun analyze(input: List<AdvancedCandle>): AdvancedSignal {
+
+        val candles = input.takeLast(MAX_CANDLES)
+
+        if (candles.size < 10) {
+            return emptyResult("বিশ্লেষণের জন্য আরও ক্যান্ডেল প্রয়োজন")
+        }
+
+        if (candles.any {
+                it.high < it.low ||
+                it.high < maxOf(it.open, it.close) ||
+                it.low > minOf(it.open, it.close)
+            }) {
+            return emptyResult("ক্যান্ডেল ডেটা সঠিক নয়")
+        }
+
+        val highs = findSwings(candles, true)
+        val lows = findSwings(candles, false)
+
+        val last = candles.last()
+        val previous = candles[candles.lastIndex - 1]
+
+        val lastHigh = highs.lastOrNull()
+        val lastLow = lows.lastOrNull()
+
+        val previousHigh = highs.dropLast(1).lastOrNull()
+        val previousLow = lows.dropLast(1).lastOrNull()
+
+        val structure = detectStructure(highs, lows)
+        val trend = detectTrend(candles, highs, lows)
+
+        val bullishBos =
+            lastHigh != null &&
+            last.close > lastHigh.price
+
+        val bearishBos =
+            lastLow != null &&
+            last.close < lastLow.price
+
+        val bos = when {
+            bullishBos -> "BULLISH BOS"
+            bearishBos -> "BEARISH BOS"
+            else -> "NO BOS"
+        }
+
+        val choch = when {
+            trend == "DOWNTREND" && bullishBos ->
+                "BULLISH CHOCH"
+
+            trend == "UPTREND" && bearishBos ->
+                "BEARISH CHOCH"
+
+            else -> "NO CHOCH"
+        }
+
+        val bullishSweep =
+            lastLow != null &&
+            last.low < lastLow.price &&
+            last.close > lastLow.price
+
+        val bearishSweep =
+            lastHigh != null &&
+            last.high > lastHigh.price &&
+            last.close < lastHigh.price
+
+        val liquidity = when {
+            bullishSweep -> "LOW LIQUIDITY SWEEP"
+            bearishSweep -> "HIGH LIQUIDITY SWEEP"
+            else -> "NO SWEEP"
+        }
+
+        val support = lows.lastOrNull()?.price
+        val resistance = highs.lastOrNull()?.price
+
+        val bullishWick = lowerWickRejection(last)
+        val bearishWick = upperWickRejection(last)
+
+        val bullishEngulfing =
+            previous.close < previous.open &&
+            last.close > last.open &&
+            last.open <= previous.close &&
+            last.close >= previous.open
+
+        val bearishEngulfing =
+            previous.close > previous.open &&
+            last.close < last.open &&
+            last.open >= previous.close &&
+            last.close <= previous.open
+
+        var score = 0
+
+        if (trend == "UPTREND") score += 2
+        if (trend == "DOWNTREND") score -= 2
+
+        if (structure == "BULLISH STRUCTURE") score += 2
+        if (structure == "BEARISH STRUCTURE") score -= 2
+
+        if (bullishBos) score += 3
+        if (bearishBos) score -= 3
+
+        if (choch == "BULLISH CHOCH") score += 2
+        if (choch == "BEARISH CHOCH") score -= 2
+
+        if (bullishSweep) score += 2
+        if (bearishSweep) score -= 2
+
+        if (bullishWick) score += 1
+        if (bearishWick) score -= 1
+
+        if (bullishEngulfing) score += 2
+        if (bearishEngulfing) score -= 2
+
+        val signal = when {
+            score >= 5 -> "UP"
+            score <= -5 -> "DOWN"
+            else -> "WAIT"
+        }
+
+        val confidence = when {
+            signal == "WAIT" -> 50
+            else -> (50 + abs(score) * 5).coerceIn(50, 85)
+        }
+
+        val message = buildString {
+            append("Trend: $trend | ")
+            append("Structure: $structure | ")
+            append("BOS: $bos | ")
+            append("CHOCH: $choch | ")
+            append("Liquidity: $liquidity")
+        }
+
+        return AdvancedSignal(
+            signal = signal,
+            confidence = confidence,
+            trend = trend,
+            structure = structure,
+            bos = bos,
+            choch = choch,
+            liquidity = liquidity,
+            support = support,
+            resistance = resistance,
+            swingHighs = highs,
+            swingLows = lows,
+            message = message
+        )
+    }
+
+    private fun findSwings(
+        candles: List<AdvancedCandle>,
+        findHigh: Boolean
+    ): List<SwingPoint> {
+
+        val result = mutableListOf<SwingPoint>()
+
+        for (i in PIVOT_RADIUS until candles.size - PIVOT_RADIUS) {
+
+            val current = candles[i]
+
+            val isPivot = (1..PIVOT_RADIUS).all { distance ->
+
+                val left = candles[i - distance]
+                val right = candles[i + distance]
+
+                if (findHigh) {
+                    current.high > left.high &&
+                    current.high >= right.high
+                } else {
+                    current.low < left.low &&
+                    current.low <= right.low
+                }
+            }
+
+            if (isPivot) {
+                result.add(
+                    SwingPoint(
+                        index = i,
+                        price = if (findHigh) current.high else current.low,
+                        type = if (findHigh) "SWING HIGH" else "SWING LOW"
+                    )
+                )
+            }
+        }
+
+        return result
+    }
+
+    private fun detectStructure(
+        highs: List<SwingPoint>,
+        lows: List<SwingPoint>
+    ): String {
+
+        if (highs.size < 2 || lows.size < 2) {
+            return "STRUCTURE UNKNOWN"
+        }
+
+        val higherHigh =
+            highs.last().price > highs[highs.lastIndex - 1].price
+
+        val higherLow =
+            lows.last().price > lows[lows.lastIndex - 1].price
+
+        val lowerHigh =
+            highs.last().price < highs[highs.lastIndex - 1].price
+
+        val lowerLow =
+            lows.last().price < lows[lows.lastIndex - 1].price
+
+        return when {
+            higherHigh && higherLow -> "BULLISH STRUCTURE"
+            lowerHigh && lowerLow -> "BEARISH STRUCTURE"
+            else -> "MIXED STRUCTURE"
+        }
+    }
+
+    private fun detectTrend(
+        candles: List<AdvancedCandle>,
+        highs: List<SwingPoint>,
+        lows: List<SwingPoint>
+    ): String {
+
+        val structure = detectStructure(highs, lows)
+
+        val firstClose = candles.first().close
+        val lastClose = candles.last().close
+
+        return when {
+            structure == "BULLISH STRUCTURE" &&
+                lastClose > firstClose -> "UPTREND"
+
+            structure == "BEARISH STRUCTURE" &&
+                lastClose < firstClose -> "DOWNTREND"
+
+            else -> "SIDEWAYS"
+        }
+    }
+
+    private fun lowerWickRejection(
+        candle: AdvancedCandle
+    ): Boolean {
+
+        val body = abs(candle.close - candle.open)
+        val lowerWick = minOf(candle.open, candle.close) - candle.low
+        val range = candle.high - candle.low
+
+        return range > 0 &&
+            lowerWick > body * 1.5 &&
+            candle.close > candle.open
+    }
+
+    private fun upperWickRejection(
+        candle: AdvancedCandle
+    ): Boolean {
+
+        val body = abs(candle.close - candle.open)
+        val upperWick = candle.high - maxOf(candle.open, candle.close)
+        val range = candle.high - candle.low
+
+        return range > 0 &&
+            upperWick > body * 1.5 &&
+            candle.close < candle.open
+    }
+
+    private fun emptyResult(reason: String): AdvancedSignal {
+        return AdvancedSignal(
+            signal = "WAIT",
+            confidence = 0,
+            trend = "UNKNOWN",
+            structure = "UNKNOWN",
+            bos = "UNKNOWN",
+            choch = "UNKNOWN",
+            liquidity = "UNKNOWN",
+            support = null,
+            resistance = null,
+            swingHighs = emptyList(),
+            swingLows = emptyList(),
+            message = reason
+        )
+    }
+}
