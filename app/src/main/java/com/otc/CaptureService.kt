@@ -14,7 +14,7 @@ import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Handler
-import android.os.HandlerThread
+import android.os.HandlerThr
 import android.os.IBinder
 import android.content.Context
 
