@@ -11,7 +11,6 @@ import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
 import android.graphics.PixelFormat
 import android.hardware.display.VirtualDisplay
-import android.media.Image
 import android.media.ImageReader
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
@@ -22,7 +21,6 @@ import android.os.IBinder
 import android.os.SystemClock
 import android.util.Log
 import com.google.mlkit.vision.common.InputImage
-import com.google.mlkit.vision.text.TextRecognizer
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import java.util.concurrent.atomic.AtomicBoolean
@@ -35,7 +33,7 @@ class CaptureService : Service() {
     private var display: VirtualDisplay? = null
     private var projectionCallback: MediaProjection.Callback? = null
 
-    private var recognizer: TextRecognizer? = null
+    private var recognizer: com.google.mlkit.vision.text.TextRecognizer? = null
 
     private val ocrRunning = AtomicBoolean(false)
     private val pendingAnalysis = AtomicBoolean(false)
@@ -82,9 +80,9 @@ class CaptureService : Service() {
                 TextRecognizerOptions.DEFAULT_OPTIONS
             )
 
-            val manager =
-                getSystemService(Context.MEDIA_PROJECTION_SERVICE)
-                    as MediaProjectionManager
+            val manager = getSystemService(
+                Context.MEDIA_PROJECTION_SERVICE
+            ) as MediaProjectionManager
 
             val currentProjection =
                 manager.getMediaProjection(resultCode, data)
@@ -138,6 +136,8 @@ class CaptureService : Service() {
                 handler
             )
 
+            Log.d("OTCCandleAI", "Screen capture started")
+
         } catch (e: Exception) {
             Log.e("CaptureService", "Capture start failed", e)
             stopSelf()
@@ -151,7 +151,7 @@ class CaptureService : Service() {
         imageReader: ImageReader,
         width: Int
     ) {
-        var image: Image? = null
+        var image: android.media.Image? = null
         var paddedBitmap: Bitmap? = null
         var bitmap: Bitmap? = null
 
@@ -179,7 +179,6 @@ class CaptureService : Service() {
                 image.height
             )
 
-            // Read chart timer approximately once per second.
             val now = SystemClock.elapsedRealtime()
 
             if (
@@ -190,7 +189,6 @@ class CaptureService : Service() {
                 readChartTimer(bitmap)
             }
 
-            // Analyze once after a confirmed timer reset.
             if (pendingAnalysis.compareAndSet(true, false)) {
 
                 val result = CandleAnalyzer.analyze(bitmap)
@@ -209,7 +207,7 @@ class CaptureService : Service() {
 
                 Log.d(
                     "OTCCandleAI",
-                    "New minute analysis: ${result.signal}, confidence: ${result.confidence}"
+                    "Analysis: ${result.signal}, confidence: ${result.confidence}"
                 )
             }
 
@@ -224,43 +222,15 @@ class CaptureService : Service() {
 
     private fun readChartTimer(bitmap: Bitmap) {
 
-        var timerBitmap: Bitmap? = null
+        var ocrBitmap: Bitmap? = null
 
         try {
-            // Chart countdown timer crop.
-            val left = (bitmap.width * 0.67f).toInt()
-            val top = (bitmap.height * 0.60f).toInt()
-            val right = (bitmap.width * 0.79f).toInt()
-            val bottom = (bitmap.height * 0.645f).toInt()
+            // OCR gets a separate copy because processing is asynchronous.
+            ocrBitmap = bitmap.copy(Bitmap.Config.ARGB_8888, false)
 
-            val safeLeft = left.coerceIn(0, bitmap.width - 1)
-            val safeTop = top.coerceIn(0, bitmap.height - 1)
-
-            val safeRight = right.coerceIn(
-                safeLeft + 1,
-                bitmap.width
-            )
-
-            val safeBottom = bottom.coerceIn(
-                safeTop + 1,
-                bitmap.height
-            )
-
-            timerBitmap = Bitmap.createBitmap(
-                bitmap,
-                safeLeft,
-                safeTop,
-                safeRight - safeLeft,
-                safeBottom - safeTop
-            )
-
-            val inputImage = InputImage.fromBitmap(
-                timerBitmap,
-                0
-            )
-
-            val imageToRecycle = timerBitmap
-            timerBitmap = null
+            val inputImage = InputImage.fromBitmap(ocrBitmap, 0)
+            val imageToRecycle = ocrBitmap
+            ocrBitmap = null
 
             val textRecognizer = recognizer
 
@@ -273,38 +243,72 @@ class CaptureService : Service() {
             textRecognizer.process(inputImage)
                 .addOnSuccessListener { visionText ->
 
-                    val normalized = visionText.text
-                        .replace('O', '0')
-                        .replace('o', '0')
+                    val timerPattern = Regex(
+                        """(?<!\d)(\d{1,2}):([0-5]\d)(?!\d)"""
+                    )
 
-                    // Accept only countdown format MM:SS.
-                    val match = Regex(
-                        """\b(\d{1,2}):([0-5]\d)\b"""
-                    ).find(normalized)
+                    var detectedTimer: String? = null
+                    var detectedSeconds: Int? = null
 
-                    if (match != null) {
+                    // Search for timer text in the chart's right-hand area.
+                    for (block in visionText.textBlocks) {
+
+                        val bounds = block.boundingBox ?: continue
+
+                        val centerX =
+                            bounds.centerX().toFloat() / bitmap.width
+
+                        val centerY =
+                            bounds.centerY().toFloat() / bitmap.height
+
+                        if (
+                            centerX < 0.45f ||
+                            centerX > 0.98f ||
+                            centerY < 0.30f ||
+                            centerY > 0.78f
+                        ) {
+                            continue
+                        }
+
+                        val normalized = block.text
+                            .replace('O', '0')
+                            .replace('o', '0')
+
+                        val match = timerPattern.find(normalized)
+                            ?: continue
 
                         val minutes =
-                            match.groupValues[1].toIntOrNull() ?: return@addOnSuccessListener
+                            match.groupValues[1].toIntOrNull() ?: continue
 
                         val seconds =
-                            match.groupValues[2].toIntOrNull() ?: return@addOnSuccessListener
+                            match.groupValues[2].toIntOrNull() ?: continue
 
-                        val remaining = minutes * 60 + seconds
+                        detectedTimer = match.value
+                        detectedSeconds = minutes * 60 + seconds
+                        break
+                    }
+
+                    val remaining = detectedSeconds
+
+                    if (remaining != null && detectedTimer != null) {
 
                         val previous = previousSecondsRemaining
 
-                        // Detect transition from near zero to a new minute.
-                        if (
-                            previous != null &&
-                            previous <= 3 &&
-                            remaining >= 55
-                        ) {
+                        // First valid timer reading: analyze available completed candles.
+                        if (previous == null) {
                             pendingAnalysis.set(true)
 
                             Log.d(
                                 "OTCCandleAI",
-                                "New minute detected: $remaining seconds"
+                                "First timer detected; initial analysis queued"
+                            )
+                        } else if (remaining > previous + 15) {
+                            // Countdown has reset or jumped to a new minute.
+                            pendingAnalysis.set(true)
+
+                            Log.d(
+                                "OTCCandleAI",
+                                "New minute detected: $detectedTimer"
                             )
                         }
 
@@ -314,7 +318,7 @@ class CaptureService : Service() {
                             "com.otc.candleai.ANALYSIS_UPDATE"
                         ).apply {
                             setPackage(packageName)
-                            putExtra("timerText", match.value)
+                            putExtra("timerText", detectedTimer)
                             putExtra("secondsRemaining", remaining)
                             putExtra("timerDetected", true)
                         }
@@ -323,16 +327,17 @@ class CaptureService : Service() {
 
                         Log.d(
                             "OTCCandleAI",
-                            "Chart timer: ${match.value}"
+                            "Chart timer: $detectedTimer"
+                        )
+                    } else {
+                        Log.d(
+                            "OTCCandleAI",
+                            "Chart timer not found in expected area"
                         )
                     }
                 }
                 .addOnFailureListener { error ->
-                    Log.e(
-                        "OTCCandleAI",
-                        "Timer OCR failed",
-                        error
-                    )
+                    Log.e("OTCCandleAI", "Timer OCR failed", error)
                 }
                 .addOnCompleteListener {
                     imageToRecycle.recycle()
@@ -340,14 +345,9 @@ class CaptureService : Service() {
                 }
 
         } catch (e: Exception) {
-            timerBitmap?.recycle()
+            ocrBitmap?.recycle()
             ocrRunning.set(false)
-
-            Log.e(
-                "OTCCandleAI",
-                "Timer reading error",
-                e
-            )
+            Log.e("OTCCandleAI", "Timer reading error", e)
         }
     }
 
