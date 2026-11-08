@@ -31,7 +31,6 @@ class FloatingWindowService : Service() {
     }
 
     private lateinit var windowManager: WindowManager
-
     private var floatingView: LinearLayout? = null
     private var receiverRegistered = false
 
@@ -41,32 +40,29 @@ class FloatingWindowService : Service() {
 
     private val analysisReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            when (intent?.action) {
 
-                ACTION_HIDE -> hidePanel()
+            if (intent?.action != "com.otc.candleai.ANALYSIS_UPDATE") return
 
-                ACTION_SHOW -> showPanel()
+            // Timer update হলে পুরোনো Analysis পরিবর্তন করবে না।
+            if (!intent.hasExtra("signal")) return
 
-                "com.otc.candleai.ANALYSIS_UPDATE" -> {
-                    if (floatingView == null) return
+            if (floatingView == null) return
 
-                    val signal = intent.getStringExtra("signal") ?: "WAIT"
-                    val confidence = intent.getIntExtra("confidence", 0)
-                    val message = intent.getStringExtra("message") ?: "Waiting"
+            val signal = intent.getStringExtra("signal") ?: "WAIT"
+            val confidence = intent.getIntExtra("confidence", 0)
+            val message = intent.getStringExtra("message") ?: "Waiting"
 
-                    signalView.text = signal
-                    confidenceView.text = "Score: $confidence%"
-                    infoView.text = message
+            signalView.text = signal
+            confidenceView.text = "Score: $confidence%"
+            infoView.text = message
 
-                    signalView.setTextColor(
-                        when (signal) {
-                            "UP" -> Color.GREEN
-                            "DOWN" -> Color.RED
-                            else -> Color.YELLOW
-                        }
-                    )
+            signalView.setTextColor(
+                when (signal) {
+                    "UP" -> Color.GREEN
+                    "DOWN" -> Color.RED
+                    else -> Color.YELLOW
                 }
-            }
+            )
         }
     }
 
@@ -81,8 +77,7 @@ class FloatingWindowService : Service() {
             return START_NOT_STICKY
         }
 
-        windowManager =
-            getSystemService(WINDOW_SERVICE) as WindowManager
+        windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
 
         registerAnalysisReceiver()
 
@@ -142,9 +137,7 @@ class FloatingWindowService : Service() {
             textSize = 22f
             setTextColor(Color.WHITE)
             setPadding(8, 4, 8, 4)
-            setOnClickListener {
-                hidePanel()
-            }
+            setOnClickListener { hidePanel() }
         }
 
         header.addView(
@@ -200,10 +193,7 @@ class FloatingWindowService : Service() {
             y = prefs.getInt(KEY_Y, 200)
         }
 
-        // শুধু Title ধরে Panel সরানো যাবে।
-        // × Button আলাদাভাবে কাজ করবে।
         title.setOnTouchListener(object : View.OnTouchListener {
-
             private var startX = 0
             private var startY = 0
             private var touchX = 0f
@@ -212,7 +202,6 @@ class FloatingWindowService : Service() {
 
             override fun onTouch(view: View, event: MotionEvent): Boolean {
                 when (event.action) {
-
                     MotionEvent.ACTION_DOWN -> {
                         startX = params.x
                         startY = params.y
@@ -246,9 +235,7 @@ class FloatingWindowService : Service() {
                     }
 
                     MotionEvent.ACTION_UP -> {
-                        if (dragging) {
-                            savePosition(params)
-                        }
+                        if (dragging) savePosition(params)
                         return true
                     }
                 }
@@ -289,7 +276,6 @@ class FloatingWindowService : Service() {
                 )
             }
         }
-
         floatingView = null
     }
 
