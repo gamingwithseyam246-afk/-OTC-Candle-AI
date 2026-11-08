@@ -51,7 +51,9 @@ object CandleAnalyzer {
 
     fun analyze(bitmap: Bitmap): CandleSignal {
 
-        val bars = detectCandles(bitmap).takeLast(30)
+        // Detect candles, then exclude the final possibly-forming candle.
+        val detectedBars = detectCandles(bitmap)
+        val bars = detectedBars.dropLast(1).takeLast(30)
 
         val green = bars.count { it.bullish }
         val red = bars.count { !it.bullish }
@@ -59,7 +61,7 @@ object CandleAnalyzer {
         if (bars.size < 8) {
             return CandleSignal(
                 "WAIT", 0, green, red,
-                "পর্যাপ্ত ক্যান্ডেল পাওয়া যায়নি: ${bars.size}টি"
+                "পর্যাপ্ত সম্পূর্ণ ক্যান্ডেল পাওয়া যায়নি: ${bars.size}টি"
             )
         }
 
@@ -108,11 +110,8 @@ object CandleAnalyzer {
             last.closeY > lastSwingLow.levelY
 
         // Change of Character
-        val bullishCHOCH =
-            trend == "DOWNTREND" && bullishBOS
-
-        val bearishCHOCH =
-            trend == "UPTREND" && bearishBOS
+        val bullishCHOCH = trend == "DOWNTREND" && bullishBOS
+        val bearishCHOCH = trend == "UPTREND" && bearishBOS
 
         // Support and Resistance
         val averageRange = bars.takeLast(10)
@@ -141,11 +140,7 @@ object CandleAnalyzer {
             nearResistance
 
         // Candlestick patterns
-        val pattern = detectPattern(
-            previous,
-            last,
-            trendMove
-        )
+        val pattern = detectPattern(previous, last, trendMove)
 
         // Combined score
         var score = 0
@@ -183,8 +178,7 @@ object CandleAnalyzer {
         }
 
         // Heuristic confidence, not a measured win probability.
-        val confidence = (abs(score) * 4)
-            .coerceIn(0, 75)
+        val confidence = (abs(score) * 4).coerceIn(0, 75)
 
         val signal = when {
             confidence < 20 -> "WAIT"
@@ -194,12 +188,9 @@ object CandleAnalyzer {
         }
 
         val structureText = when {
-            higherHigh && higherLow ->
-                "Higher High + Higher Low"
-            lowerHigh && lowerLow ->
-                "Lower High + Lower Low"
-            else ->
-                "Mixed Market Structure"
+            higherHigh && higherLow -> "Higher High + Higher Low"
+            lowerHigh && lowerLow -> "Lower High + Lower Low"
+            else -> "Mixed Market Structure"
         }
 
         val bosText = when {
@@ -262,10 +253,7 @@ object CandleAnalyzer {
         )
     }
 
-    private fun findSwingHighs(
-        bars: List<Bar>
-    ): List<Swing> {
-
+    private fun findSwingHighs(bars: List<Bar>): List<Swing> {
         val result = mutableListOf<Swing>()
         val radius = 2
 
@@ -274,21 +262,16 @@ object CandleAnalyzer {
 
             val isSwingHigh = (1..radius).all { distance ->
                 current < bars[i - distance].topY &&
-                current < bars[i + distance].topY
+                    current < bars[i + distance].topY
             }
 
-            if (isSwingHigh) {
-                result.add(Swing(i, current))
-            }
+            if (isSwingHigh) result.add(Swing(i, current))
         }
 
         return result
     }
 
-    private fun findSwingLows(
-        bars: List<Bar>
-    ): List<Swing> {
-
+    private fun findSwingLows(bars: List<Bar>): List<Swing> {
         val result = mutableListOf<Swing>()
         val radius = 2
 
@@ -297,12 +280,10 @@ object CandleAnalyzer {
 
             val isSwingLow = (1..radius).all { distance ->
                 current > bars[i - distance].bottomY &&
-                current > bars[i + distance].bottomY
+                    current > bars[i + distance].bottomY
             }
 
-            if (isSwingLow) {
-                result.add(Swing(i, current))
-            }
+            if (isSwingLow) result.add(Swing(i, current))
         }
 
         return result
@@ -316,44 +297,37 @@ object CandleAnalyzer {
 
         val body = current.body.coerceAtLeast(1)
 
-        if (current.body <=
-            maxOf(2, (current.range * 0.12).toInt())) {
+        if (current.body <= maxOf(2, (current.range * 0.12).toInt())) {
             return "Doji"
         }
 
         if (current.lowerWick >= body * 2 &&
             current.upperWick <= body &&
-            trend < 0) {
-            return "Hammer"
-        }
+            trend < 0
+        ) return "Hammer"
 
         if (current.upperWick >= body * 2 &&
             current.lowerWick <= body &&
-            trend > 0) {
-            return "Shooting Star"
-        }
+            trend > 0
+        ) return "Shooting Star"
 
         val engulfing =
             current.bodyTop <= previous.bodyTop &&
-            current.bodyBottom >= previous.bodyBottom &&
-            current.body > previous.body
+                current.bodyBottom >= previous.bodyBottom &&
+                current.body > previous.body
 
-        if (engulfing && current.bullish &&
-            !previous.bullish) {
+        if (engulfing && current.bullish && !previous.bullish) {
             return "Bullish Engulfing"
         }
 
-        if (engulfing && !current.bullish &&
-            previous.bullish) {
+        if (engulfing && !current.bullish && previous.bullish) {
             return "Bearish Engulfing"
         }
 
         return "None"
     }
 
-    private fun detectCandles(
-        bitmap: Bitmap
-    ): List<Bar> {
+    private fun detectCandles(bitmap: Bitmap): List<Bar> {
 
         if (bitmap.width < 100 || bitmap.height < 100) {
             return emptyList()
@@ -374,10 +348,7 @@ object CandleAnalyzer {
 
         for (x in 0 until width) {
             for (y in 0 until height) {
-                val type = colorType(
-                    bitmap.getPixel(left + x, top + y)
-                )
-
+                val type = colorType(bitmap.getPixel(left + x, top + y))
                 if (type == 1) greenCounts[x]++
                 if (type == 2) redCounts[x]++
             }
@@ -418,13 +389,13 @@ object CandleAnalyzer {
 
             while (x + 1 < width &&
                 columnTypes[x] == 0 &&
-                columnTypes[x + 1] == type) {
+                columnTypes[x + 1] == type
+            ) {
                 endX = x + 1
                 x += 2
             }
 
             val candleWidth = endX - startX + 1
-
             if (candleWidth > 30) continue
 
             val rowCounts = IntArray(height)
@@ -450,10 +421,7 @@ object CandleAnalyzer {
             val peak = rowCounts.maxOrNull() ?: 0
             if (peak < 2) continue
 
-            val threshold = maxOf(
-                2,
-                ceil(peak * 0.45).toInt()
-            )
+            val threshold = maxOf(2, ceil(peak * 0.45).toInt())
 
             val peakY = rowCounts.indices.maxByOrNull {
                 rowCounts[it]
@@ -463,14 +431,12 @@ object CandleAnalyzer {
             var bodyBottom = peakY
 
             while (bodyTop > minY &&
-                rowCounts[bodyTop - 1] >= threshold) {
-                bodyTop--
-            }
+                rowCounts[bodyTop - 1] >= threshold
+            ) bodyTop--
 
             while (bodyBottom < maxY &&
-                rowCounts[bodyBottom + 1] >= threshold) {
-                bodyBottom++
-            }
+                rowCounts[bodyBottom + 1] >= threshold
+            ) bodyBottom++
 
             val body = bodyBottom - bodyTop + 1
             val upperWick = bodyTop - minY
@@ -486,11 +452,7 @@ object CandleAnalyzer {
                     upperWick = upperWick,
                     lowerWick = lowerWick,
                     centerX = left + (startX + endX) / 2,
-                    closeY = if (type == 1) {
-                        bodyTop + top
-                    } else {
-                        bodyBottom + top
-                    },
+                    closeY = if (type == 1) bodyTop + top else bodyBottom + top,
                     topY = minY + top,
                     bottomY = maxY + top,
                     bodyTop = bodyTop + top,
