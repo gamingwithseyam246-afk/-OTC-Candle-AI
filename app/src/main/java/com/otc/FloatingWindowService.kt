@@ -17,15 +17,13 @@ import android.view.View
 import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.TextView
+import kotlin.math.abs
 
 class FloatingWindowService : Service() {
 
     companion object {
-        const val ACTION_SHOW =
-            "com.otc.candleai.SHOW_PANEL"
-
-        const val ACTION_HIDE =
-            "com.otc.candleai.HIDE_PANEL"
+        const val ACTION_SHOW = "com.otc.candleai.SHOW_PANEL"
+        const val ACTION_HIDE = "com.otc.candleai.HIDE_PANEL"
 
         private const val PREFS = "floating_panel_settings"
         private const val KEY_X = "panel_x"
@@ -35,18 +33,14 @@ class FloatingWindowService : Service() {
     private lateinit var windowManager: WindowManager
 
     private var floatingView: LinearLayout? = null
-    private var panelParams: WindowManager.LayoutParams? = null
+    private var receiverRegistered = false
 
     private lateinit var signalView: TextView
     private lateinit var infoView: TextView
     private lateinit var confidenceView: TextView
 
-    private var receiverRegistered = false
-    private var panelHidden = false
-
     private val analysisReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-
             when (intent?.action) {
 
                 ACTION_HIDE -> hidePanel()
@@ -54,17 +48,11 @@ class FloatingWindowService : Service() {
                 ACTION_SHOW -> showPanel()
 
                 "com.otc.candleai.ANALYSIS_UPDATE" -> {
-
                     if (floatingView == null) return
 
-                    val signal =
-                        intent.getStringExtra("signal") ?: "WAIT"
-
-                    val confidence =
-                        intent.getIntExtra("confidence", 0)
-
-                    val message =
-                        intent.getStringExtra("message") ?: "Waiting"
+                    val signal = intent.getStringExtra("signal") ?: "WAIT"
+                    val confidence = intent.getIntExtra("confidence", 0)
+                    val message = intent.getStringExtra("message") ?: "Waiting"
 
                     signalView.text = signal
                     confidenceView.text = "Score: $confidence%"
@@ -108,13 +96,10 @@ class FloatingWindowService : Service() {
     }
 
     private fun registerAnalysisReceiver() {
-
         if (receiverRegistered) return
 
         val filter = IntentFilter().apply {
             addAction("com.otc.candleai.ANALYSIS_UPDATE")
-            addAction(ACTION_HIDE)
-            addAction(ACTION_SHOW)
         }
 
         if (Build.VERSION.SDK_INT >= 33) {
@@ -132,9 +117,6 @@ class FloatingWindowService : Service() {
     }
 
     private fun showPanel() {
-
-        panelHidden = false
-
         if (floatingView != null) return
 
         val panel = LinearLayout(this).apply {
@@ -152,14 +134,14 @@ class FloatingWindowService : Service() {
             text = "OTC CANDLE AI"
             textSize = 16f
             setTextColor(Color.WHITE)
-            setPadding(0, 0, 20, 0)
+            setPadding(0, 8, 20, 8)
         }
 
         val hideButton = TextView(this).apply {
             text = "  ×  "
             textSize = 22f
             setTextColor(Color.WHITE)
-            setPadding(8, 0, 0, 0)
+            setPadding(8, 4, 8, 4)
             setOnClickListener {
                 hidePanel()
             }
@@ -218,86 +200,76 @@ class FloatingWindowService : Service() {
             y = prefs.getInt(KEY_Y, 200)
         }
 
-        panelParams = params
+        // শুধু Title ধরে Panel সরানো যাবে।
+        // × Button আলাদাভাবে কাজ করবে।
+        title.setOnTouchListener(object : View.OnTouchListener {
 
-        // Drag the panel by touching its title area.
-        header.setOnTouchListener(
-            object : View.OnTouchListener {
+            private var startX = 0
+            private var startY = 0
+            private var touchX = 0f
+            private var touchY = 0f
+            private var dragging = false
 
-                private var startX = 0
-                private var startY = 0
-                private var touchX = 0f
-                private var touchY = 0f
-                private var dragging = false
+            override fun onTouch(view: View, event: MotionEvent): Boolean {
+                when (event.action) {
 
-                override fun onTouch(
-                    view: View,
-                    event: MotionEvent
-                ): Boolean {
-
-                    when (event.action) {
-
-                        MotionEvent.ACTION_DOWN -> {
-                            startX = params.x
-                            startY = params.y
-                            touchX = event.rawX
-                            touchY = event.rawY
-                            dragging = false
-                            return true
-                        }
-
-                        MotionEvent.ACTION_MOVE -> {
-                            val dx =
-                                (event.rawX - touchX).toInt()
-
-                            val dy =
-                                (event.rawY - touchY).toInt()
-
-                            if (kotlin.math.abs(dx) > 4 ||
-                                kotlin.math.abs(dy) > 4
-                            ) {
-                                dragging = true
-                            }
-
-                            params.x = (startX + dx).coerceAtLeast(0)
-                            params.y = (startY + dy).coerceAtLeast(0)
-
-                            try {
-                                windowManager.updateViewLayout(
-                                    panel,
-                                    params
-                                )
-                            } catch (_: Exception) {
-                            }
-
-                            return true
-                        }
-
-                        MotionEvent.ACTION_UP -> {
-                            if (dragging) {
-                                savePosition(params)
-                            }
-                            return true
-                        }
+                    MotionEvent.ACTION_DOWN -> {
+                        startX = params.x
+                        startY = params.y
+                        touchX = event.rawX
+                        touchY = event.rawY
+                        dragging = false
+                        return true
                     }
 
-                    return false
+                    MotionEvent.ACTION_MOVE -> {
+                        val dx = (event.rawX - touchX).toInt()
+                        val dy = (event.rawY - touchY).toInt()
+
+                        if (abs(dx) > 4 || abs(dy) > 4) {
+                            dragging = true
+                        }
+
+                        params.x = (startX + dx).coerceAtLeast(0)
+                        params.y = (startY + dy).coerceAtLeast(0)
+
+                        try {
+                            windowManager.updateViewLayout(panel, params)
+                        } catch (e: Exception) {
+                            android.util.Log.e(
+                                "FloatingWindowService",
+                                "Move failed",
+                                e
+                            )
+                        }
+                        return true
+                    }
+
+                    MotionEvent.ACTION_UP -> {
+                        if (dragging) {
+                            savePosition(params)
+                        }
+                        return true
+                    }
                 }
+                return true
             }
-        )
+        })
 
         try {
             windowManager.addView(panel, params)
             floatingView = panel
         } catch (e: Exception) {
             floatingView = null
-            LogError("Panel could not be displayed", e)
+            android.util.Log.e(
+                "FloatingWindowService",
+                "Panel could not be displayed",
+                e
+            )
         }
     }
 
-    private fun savePosition(
-        params: WindowManager.LayoutParams
-    ) {
+    private fun savePosition(params: WindowManager.LayoutParams) {
         getSharedPreferences(PREFS, MODE_PRIVATE)
             .edit()
             .putInt(KEY_X, params.x)
@@ -306,26 +278,22 @@ class FloatingWindowService : Service() {
     }
 
     private fun hidePanel() {
-
-        panelHidden = true
-
         floatingView?.let { view ->
             try {
                 windowManager.removeView(view)
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                android.util.Log.e(
+                    "FloatingWindowService",
+                    "Panel hide failed",
+                    e
+                )
             }
         }
 
         floatingView = null
-        panelParams = null
-    }
-
-    private fun LogError(message: String, error: Exception) {
-        android.util.Log.e("FloatingWindowService", message, error)
     }
 
     override fun onDestroy() {
-
         if (receiverRegistered) {
             try {
                 unregisterReceiver(analysisReceiver)
@@ -335,7 +303,6 @@ class FloatingWindowService : Service() {
         }
 
         hidePanel()
-
         super.onDestroy()
     }
 
