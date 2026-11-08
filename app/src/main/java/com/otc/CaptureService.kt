@@ -190,7 +190,7 @@ class CaptureService : Service() {
                 readChartTimer(bitmap)
             }
 
-            // Analyze only once after a new minute is detected.
+            // Analyze once after a confirmed timer reset.
             if (pendingAnalysis.compareAndSet(true, false)) {
 
                 val result = CandleAnalyzer.analyze(bitmap)
@@ -209,7 +209,7 @@ class CaptureService : Service() {
 
                 Log.d(
                     "OTCCandleAI",
-                    "New minute analysis: ${result.signal}"
+                    "New minute analysis: ${result.signal}, confidence: ${result.confidence}"
                 )
             }
 
@@ -227,6 +227,7 @@ class CaptureService : Service() {
         var timerBitmap: Bitmap? = null
 
         try {
+            // Chart countdown timer crop.
             val left = (bitmap.width * 0.67f).toInt()
             val top = (bitmap.height * 0.60f).toInt()
             val right = (bitmap.width * 0.79f).toInt()
@@ -276,6 +277,7 @@ class CaptureService : Service() {
                         .replace('O', '0')
                         .replace('o', '0')
 
+                    // Accept only countdown format MM:SS.
                     val match = Regex(
                         """\b(\d{1,2}):([0-5]\d)\b"""
                     ).find(normalized)
@@ -283,17 +285,16 @@ class CaptureService : Service() {
                     if (match != null) {
 
                         val minutes =
-                            match.groupValues[1].toInt()
+                            match.groupValues[1].toIntOrNull() ?: return@addOnSuccessListener
 
                         val seconds =
-                            match.groupValues[2].toInt()
+                            match.groupValues[2].toIntOrNull() ?: return@addOnSuccessListener
 
-                        val remaining =
-                            minutes * 60 + seconds
+                        val remaining = minutes * 60 + seconds
 
                         val previous = previousSecondsRemaining
 
-                        // Detect timer reset: near zero -> near one minute.
+                        // Detect transition from near zero to a new minute.
                         if (
                             previous != null &&
                             previous <= 3 &&
@@ -303,7 +304,7 @@ class CaptureService : Service() {
 
                             Log.d(
                                 "OTCCandleAI",
-                                "New minute detected"
+                                "New minute detected: $remaining seconds"
                             )
                         }
 
@@ -314,10 +315,7 @@ class CaptureService : Service() {
                         ).apply {
                             setPackage(packageName)
                             putExtra("timerText", match.value)
-                            putExtra(
-                                "secondsRemaining",
-                                remaining
-                            )
+                            putExtra("secondsRemaining", remaining)
                             putExtra("timerDetected", true)
                         }
 
