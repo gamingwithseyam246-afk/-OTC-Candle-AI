@@ -22,6 +22,7 @@ import android.os.IBinder
 import android.os.SystemClock
 import android.util.Log
 import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.text.TextRecognizer
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import java.util.concurrent.atomic.AtomicBoolean
@@ -34,9 +35,7 @@ class CaptureService : Service() {
     private var display: VirtualDisplay? = null
     private var projectionCallback: MediaProjection.Callback? = null
 
-    private val recognizer by lazy {
-        TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
-    }
+    private var recognizer: TextRecognizer? = null
 
     private val ocrRunning = AtomicBoolean(false)
     private var lastOcrTime = 0L
@@ -74,6 +73,10 @@ class CaptureService : Service() {
         if (data == null) return stopWithError()
 
         try {
+            recognizer = TextRecognition.getClient(
+                TextRecognizerOptions.DEFAULT_OPTIONS
+            )
+
             val manager =
                 getSystemService(Context.MEDIA_PROJECTION_SERVICE)
                     as MediaProjectionManager
@@ -185,7 +188,7 @@ class CaptureService : Service() {
 
             sendBroadcast(update)
 
-            // Read chart countdown timer
+            // Read timer approximately once per second
             val now = SystemClock.elapsedRealtime()
 
             if (
@@ -210,7 +213,7 @@ class CaptureService : Service() {
         var timerBitmap: Bitmap? = null
 
         try {
-            // Timer position based on your Quotex screenshot
+            // Approximate timer position from your screenshot
             val left = (bitmap.width * 0.67f).toInt()
             val top = (bitmap.height * 0.60f).toInt()
             val right = (bitmap.width * 0.79f).toInt()
@@ -218,10 +221,12 @@ class CaptureService : Service() {
 
             val safeLeft = left.coerceIn(0, bitmap.width - 1)
             val safeTop = top.coerceIn(0, bitmap.height - 1)
+
             val safeRight = right.coerceIn(
                 safeLeft + 1,
                 bitmap.width
             )
+
             val safeBottom = bottom.coerceIn(
                 safeTop + 1,
                 bitmap.height
@@ -240,14 +245,21 @@ class CaptureService : Service() {
                 0
             )
 
-            val imageForCleanup = timerBitmap
+            val imageToRecycle = timerBitmap
             timerBitmap = null
 
-            recognizer.process(inputImage)
+            val textRecognizer = recognizer
+
+            if (textRecognizer == null) {
+                imageToRecycle.recycle()
+                ocrRunning.set(false)
+                return
+            }
+
+            textRecognizer.process(inputImage)
                 .addOnSuccessListener { visionText ->
 
-                    val text = visionText.text
-                    val normalized = text
+                    val normalized = visionText.text
                         .replace('O', '0')
                         .replace('o', '0')
 
@@ -294,7 +306,7 @@ class CaptureService : Service() {
                     )
                 }
                 .addOnCompleteListener {
-                    imageForCleanup.recycle()
+                    imageToRecycle.recycle()
                     ocrRunning.set(false)
                 }
 
@@ -346,6 +358,7 @@ class CaptureService : Service() {
     }
 
     override fun onDestroy() {
+
         reader?.setOnImageAvailableListener(null, null)
 
         display?.release()
@@ -363,21 +376,11 @@ class CaptureService : Service() {
         projection?.stop()
         projection = null
 
-        if (ocrRunning.get()) {
-            Log.d("OTCCandleAI", "OCR task finishing")
-        }
+        recognizer?.close()
+        recognizer = null
 
-        if (worker != null) {
-            worker?.quitSafely()
-            worker = null
-        }
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            // Release OCR resources when service stops
-            if (::recognizer.isInitialized) {
-                recognizer.close()
-            }
-        }
+        worker?.quitSafely()
+        worker = null
 
         super.onDestroy()
     }
