@@ -38,7 +38,12 @@ class CaptureService : Service() {
     private var recognizer: TextRecognizer? = null
 
     private val ocrRunning = AtomicBoolean(false)
+    private val pendingAnalysis = AtomicBoolean(false)
+
     private var lastOcrTime = 0L
+
+    @Volatile
+    private var previousSecondsRemaining: Int? = null
 
     override fun onStartCommand(
         intent: Intent?,
@@ -174,21 +179,7 @@ class CaptureService : Service() {
                 image.height
             )
 
-            // Existing candle analysis
-            val result = CandleAnalyzer.analyze(bitmap)
-
-            val update = Intent(
-                "com.otc.candleai.ANALYSIS_UPDATE"
-            ).apply {
-                setPackage(packageName)
-                putExtra("signal", result.signal)
-                putExtra("confidence", result.confidence)
-                putExtra("message", result.message)
-            }
-
-            sendBroadcast(update)
-
-            // Read timer approximately once per second
+            // Read chart timer approximately once per second.
             val now = SystemClock.elapsedRealtime()
 
             if (
@@ -197,6 +188,29 @@ class CaptureService : Service() {
             ) {
                 lastOcrTime = now
                 readChartTimer(bitmap)
+            }
+
+            // Analyze only once after a new minute is detected.
+            if (pendingAnalysis.compareAndSet(true, false)) {
+
+                val result = CandleAnalyzer.analyze(bitmap)
+
+                val update = Intent(
+                    "com.otc.candleai.ANALYSIS_UPDATE"
+                ).apply {
+                    setPackage(packageName)
+                    putExtra("signal", result.signal)
+                    putExtra("confidence", result.confidence)
+                    putExtra("message", result.message)
+                    putExtra("newMinuteAnalysis", true)
+                }
+
+                sendBroadcast(update)
+
+                Log.d(
+                    "OTCCandleAI",
+                    "New minute analysis: ${result.signal}"
+                )
             }
 
         } catch (e: Exception) {
@@ -213,7 +227,6 @@ class CaptureService : Service() {
         var timerBitmap: Bitmap? = null
 
         try {
-            // Approximate timer position from your screenshot
             val left = (bitmap.width * 0.67f).toInt()
             val top = (bitmap.height * 0.60f).toInt()
             val right = (bitmap.width * 0.79f).toInt()
@@ -268,6 +281,7 @@ class CaptureService : Service() {
                     ).find(normalized)
 
                     if (match != null) {
+
                         val minutes =
                             match.groupValues[1].toInt()
 
@@ -276,6 +290,24 @@ class CaptureService : Service() {
 
                         val remaining =
                             minutes * 60 + seconds
+
+                        val previous = previousSecondsRemaining
+
+                        // Detect timer reset: near zero -> near one minute.
+                        if (
+                            previous != null &&
+                            previous <= 3 &&
+                            remaining >= 55
+                        ) {
+                            pendingAnalysis.set(true)
+
+                            Log.d(
+                                "OTCCandleAI",
+                                "New minute detected"
+                            )
+                        }
+
+                        previousSecondsRemaining = remaining
 
                         val update = Intent(
                             "com.otc.candleai.ANALYSIS_UPDATE"
@@ -296,7 +328,6 @@ class CaptureService : Service() {
                             "Chart timer: ${match.value}"
                         )
                     }
-
                 }
                 .addOnFailureListener { error ->
                     Log.e(
