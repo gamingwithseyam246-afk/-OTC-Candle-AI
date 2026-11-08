@@ -42,13 +42,11 @@ object CandleAnalyzer {
         val g = Color.green(color)
         val b = Color.blue(color)
 
-        if (r > 110 && r > g * 1.35 &&
-            r > b * 1.25) return 2
-
-        if (g > 90 && g > r * 1.20 &&
-            g > b * 1.08) return 1
-
-        return 0
+        return when {
+            r > 110 && r > g * 1.35 && r > b * 1.25 -> 2
+            g > 90 && g > r * 1.20 && g > b * 1.08 -> 1
+            else -> 0
+        }
     }
 
     fun analyze(bitmap: Bitmap): CandleSignal {
@@ -71,7 +69,7 @@ object CandleAnalyzer {
         val last = bars.last()
         val previous = bars[bars.lastIndex - 1]
 
-        // Screen Y: smaller value means higher market price.
+        // Screen Y: smaller means higher market price.
         val trendMove = bars.first().closeY - last.closeY
 
         // Market structure
@@ -95,36 +93,41 @@ object CandleAnalyzer {
             else -> "SIDEWAYS"
         }
 
-        // Break of Structure
+        // Fresh Break of Structure
         val lastSwingHigh = highs.lastOrNull()
         val lastSwingLow = lows.lastOrNull()
 
         val bullishBOS = lastSwingHigh != null &&
-            last.closeY < lastSwingHigh.levelY &&
-            lastSwingHigh.index < bars.lastIndex
+            lastSwingHigh.index < bars.lastIndex - 1 &&
+            previous.closeY >= lastSwingHigh.levelY &&
+            last.closeY < lastSwingHigh.levelY
 
         val bearishBOS = lastSwingLow != null &&
-            last.closeY > lastSwingLow.levelY &&
-            lastSwingLow.index < bars.lastIndex
+            lastSwingLow.index < bars.lastIndex - 1 &&
+            previous.closeY <= lastSwingLow.levelY &&
+            last.closeY > lastSwingLow.levelY
 
         // Change of Character
-        val bullishCHOCH = trend == "DOWNTREND" && bullishBOS
-        val bearishCHOCH = trend == "UPTREND" && bearishBOS
+        val bullishCHOCH =
+            trend == "DOWNTREND" && bullishBOS
 
-        // Support and Resistance proximity
+        val bearishCHOCH =
+            trend == "UPTREND" && bearishBOS
+
+        // Support and Resistance
         val averageRange = bars.takeLast(10)
             .map { it.range }
             .average()
             .toInt()
             .coerceAtLeast(1)
 
+        val levelDistance = maxOf(8, averageRange * 2)
+
         val nearSupport = lastSwingLow != null &&
-            abs(last.bottomY - lastSwingLow.levelY) <=
-            maxOf(8, averageRange * 2)
+            abs(last.bottomY - lastSwingLow.levelY) <= levelDistance
 
         val nearResistance = lastSwingHigh != null &&
-            abs(last.topY - lastSwingHigh.levelY) <=
-            maxOf(8, averageRange * 2)
+            abs(last.topY - lastSwingHigh.levelY) <= levelDistance
 
         // Wick rejection
         val bullishRejection =
@@ -144,7 +147,7 @@ object CandleAnalyzer {
             trendMove
         )
 
-        // Combined analysis score
+        // Combined score
         var score = 0
 
         when (trend) {
@@ -173,32 +176,36 @@ object CandleAnalyzer {
             "Bearish Engulfing" -> score -= 3
         }
 
-        // Recent candle momentum
+        // Recent momentum
         bars.takeLast(5).forEachIndexed { index, bar ->
             val weight = index + 1
             score += if (bar.bullish) weight else -weight
         }
 
-        val confidence =
-            (abs(score) * 5).coerceIn(0, 95)
+        // Heuristic confidence, not a measured win probability.
+        val confidence = (abs(score) * 4)
+            .coerceIn(0, 75)
 
         val signal = when {
-            confidence < 25 -> "WAIT"
+            confidence < 20 -> "WAIT"
             score > 0 -> "UP"
             score < 0 -> "DOWN"
             else -> "WAIT"
         }
 
         val structureText = when {
-            higherHigh && higherLow -> "Higher High + Higher Low"
-            lowerHigh && lowerLow -> "Lower High + Lower Low"
-            else -> "Mixed Market Structure"
+            higherHigh && higherLow ->
+                "Higher High + Higher Low"
+            lowerHigh && lowerLow ->
+                "Lower High + Lower Low"
+            else ->
+                "Mixed Market Structure"
         }
 
         val bosText = when {
             bullishBOS -> "Bullish BOS"
             bearishBOS -> "Bearish BOS"
-            else -> "No confirmed BOS"
+            else -> "No fresh BOS"
         }
 
         val chochText = when {
@@ -229,8 +236,8 @@ object CandleAnalyzer {
         }
 
         val directionText = when (signal) {
-            "UP" -> "সম্ভাব্য পরবর্তী দিক: UP"
-            "DOWN" -> "সম্ভাব্য পরবর্তী দিক: DOWN"
+            "UP" -> "সম্ভাব্য দিক: UP"
+            "DOWN" -> "সম্ভাব্য দিক: DOWN"
             else -> "সম্ভাব্য দিক পরিষ্কার নয়: WAIT"
         }
 
