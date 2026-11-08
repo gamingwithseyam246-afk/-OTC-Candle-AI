@@ -17,10 +17,20 @@ class MainActivity : Activity() {
 
     private val captureRequest = 7001
     private val overlayRequest = 7002
+
     private lateinit var status: TextView
+    private lateinit var panelButton: Button
+
+    private val prefs by lazy {
+        getSharedPreferences("panel_settings", Context.MODE_PRIVATE)
+    }
+
+    private var panelEnabled = true
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        panelEnabled = prefs.getBoolean("panel_enabled", true)
 
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -38,12 +48,13 @@ class MainActivity : Activity() {
             setPadding(0, 24, 0, 24)
         }
 
-        val button = Button(this).apply {
+        val startButton = Button(this).apply {
             text = "START ANALYSIS"
+
             setOnClickListener {
                 if (Build.VERSION.SDK_INT >= 23 &&
-                    !Settings.canDrawOverlays(this@MainActivity)) {
-
+                    !Settings.canDrawOverlays(this@MainActivity)
+                ) {
                     val intent = Intent(
                         Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
                         Uri.parse("package:$packageName")
@@ -55,10 +66,45 @@ class MainActivity : Activity() {
             }
         }
 
+        panelButton = Button(this).apply {
+            setOnClickListener {
+                panelEnabled = !panelEnabled
+
+                prefs.edit()
+                    .putBoolean("panel_enabled", panelEnabled)
+                    .apply()
+
+                val action = if (panelEnabled) {
+                    FloatingWindowService.ACTION_SHOW
+                } else {
+                    FloatingWindowService.ACTION_HIDE
+                }
+
+                startService(
+                    Intent(this@MainActivity, FloatingWindowService::class.java)
+                        .setAction(action)
+                )
+
+                updatePanelButton()
+            }
+        }
+
+        updatePanelButton()
+
         layout.addView(heading)
         layout.addView(status)
-        layout.addView(button)
+        layout.addView(startButton)
+        layout.addView(panelButton)
+
         setContentView(layout)
+    }
+
+    private fun updatePanelButton() {
+        panelButton.text = if (panelEnabled) {
+            "PANEL: ON"
+        } else {
+            "PANEL: OFF"
+        }
     }
 
     private fun requestScreenCapture() {
@@ -105,11 +151,20 @@ class MainActivity : Activity() {
                     startService(captureIntent)
                 }
 
+                panelEnabled = true
+
+                prefs.edit()
+                    .putBoolean("panel_enabled", true)
+                    .apply()
+
                 startService(
                     Intent(this, FloatingWindowService::class.java)
+                        .setAction(FloatingWindowService.ACTION_SHOW)
                 )
 
-                status.text = "Floating Panel চালু করার অনুরোধ পাঠানো হয়েছে।"
+                updatePanelButton()
+
+                status.text = "Analysis চালু হয়েছে।"
             } else {
                 status.text = "Screen Capture অনুমতি পাওয়া যায়নি"
             }
