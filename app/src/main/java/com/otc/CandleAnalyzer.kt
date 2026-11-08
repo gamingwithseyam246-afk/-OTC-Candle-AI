@@ -4,7 +4,6 @@ package com.otc.candleai
 import android.graphics.Bitmap
 import android.graphics.Color
 import kotlin.math.abs
-import kotlin.math.ceil
 
 data class CandleSignal(
     val signal: String,
@@ -37,23 +36,51 @@ object CandleAnalyzer {
         val levelY: Int
     )
 
+    // Quotex green/red candle color detection
     private fun colorType(color: Int): Int {
         val r = Color.red(color)
         val g = Color.green(color)
         val b = Color.blue(color)
 
+        val hsv = FloatArray(3)
+        Color.colorToHSV(color, hsv)
+
+        val hue = hsv[0]
+        val saturation = hsv[1]
+        val value = hsv[2]
+
+        if (saturation < 0.35f || value < 0.20f) return 0
+
         return when {
-            r > 110 && r > g * 1.35 && r > b * 1.25 -> 2
-            g > 90 && g > r * 1.20 && g > b * 1.08 -> 1
+            hue in 85f..175f &&
+                g > r * 1.15 &&
+                g > b * 1.05 -> 1
+
+            (hue <= 18f || hue >= 340f) &&
+                r > g * 1.25 &&
+                r > b * 1.15 -> 2
+
             else -> 0
         }
     }
 
     fun analyze(bitmap: Bitmap): CandleSignal {
 
-        // Detect candles, then exclude the final possibly-forming candle.
+        if (bitmap.isRecycled || bitmap.width < 100 || bitmap.height < 100) {
+            return CandleSignal(
+                "WAIT", 0, 0, 0,
+                "Invalid screen image"
+            )
+        }
+
         val detectedBars = detectCandles(bitmap)
-        val bars = detectedBars.dropLast(1).takeLast(30)
+
+        // Last candle may still be forming.
+        val bars = if (detectedBars.size > 1) {
+            detectedBars.dropLast(1).takeLast(30)
+        } else {
+            emptyList()
+        }
 
         val green = bars.count { it.bullish }
         val red = bars.count { !it.bullish }
@@ -61,7 +88,7 @@ object CandleAnalyzer {
         if (bars.size < 8) {
             return CandleSignal(
                 "WAIT", 0, green, red,
-                "পর্যাপ্ত সম্পূর্ণ ক্যান্ডেল পাওয়া যায়নি: ${bars.size}টি"
+                "পর্যাপ্ত সম্পূর্ণ ক্যান্ডেল পাওয়া যায়নি: ${bars.size}টি (Detected: ${detectedBars.size})"
             )
         }
 
@@ -71,10 +98,9 @@ object CandleAnalyzer {
         val last = bars.last()
         val previous = bars[bars.lastIndex - 1]
 
-        // Screen Y: smaller means higher market price.
+        // Smaller screen Y means higher market price.
         val trendMove = bars.first().closeY - last.closeY
 
-        // Market structure
         val higherHigh = highs.size >= 2 &&
             highs.last().levelY < highs[highs.lastIndex - 1].levelY
 
@@ -95,7 +121,6 @@ object CandleAnalyzer {
             else -> "SIDEWAYS"
         }
 
-        // Fresh Break of Structure
         val lastSwingHigh = highs.lastOrNull()
         val lastSwingLow = lows.lastOrNull()
 
@@ -109,11 +134,9 @@ object CandleAnalyzer {
             previous.closeY <= lastSwingLow.levelY &&
             last.closeY > lastSwingLow.levelY
 
-        // Change of Character
         val bullishCHOCH = trend == "DOWNTREND" && bullishBOS
         val bearishCHOCH = trend == "UPTREND" && bearishBOS
 
-        // Support and Resistance
         val averageRange = bars.takeLast(10)
             .map { it.range }
             .average()
@@ -128,7 +151,6 @@ object CandleAnalyzer {
         val nearResistance = lastSwingHigh != null &&
             abs(last.topY - lastSwingHigh.levelY) <= levelDistance
 
-        // Wick rejection
         val bullishRejection =
             last.lowerWick >= last.body * 2 &&
             last.lowerWick > last.upperWick &&
@@ -139,10 +161,8 @@ object CandleAnalyzer {
             last.upperWick > last.lowerWick &&
             nearResistance
 
-        // Candlestick patterns
         val pattern = detectPattern(previous, last, trendMove)
 
-        // Combined score
         var score = 0
 
         when (trend) {
@@ -171,13 +191,11 @@ object CandleAnalyzer {
             "Bearish Engulfing" -> score -= 3
         }
 
-        // Recent momentum
         bars.takeLast(5).forEachIndexed { index, bar ->
             val weight = index + 1
             score += if (bar.bullish) weight else -weight
         }
 
-        // Heuristic confidence, not a measured win probability.
         val confidence = (abs(score) * 4).coerceIn(0, 75)
 
         val signal = when {
@@ -217,15 +235,6 @@ object CandleAnalyzer {
             else -> "Between Levels"
         }
 
-        val patternText = when (pattern) {
-            "Hammer" -> "Hammer"
-            "Shooting Star" -> "Shooting Star"
-            "Doji" -> "Doji"
-            "Bullish Engulfing" -> "Bullish Engulfing"
-            "Bearish Engulfing" -> "Bearish Engulfing"
-            else -> "No clear pattern"
-        }
-
         val directionText = when (signal) {
             "UP" -> "সম্ভাব্য দিক: UP"
             "DOWN" -> "সম্ভাব্য দিক: DOWN"
@@ -240,8 +249,9 @@ object CandleAnalyzer {
             append(" | $chochText")
             append(" | $rejectionText")
             append(" | $locationText")
-            append(" | Pattern: $patternText")
+            append(" | Pattern: $pattern")
             append(" | Green: $green, Red: $red")
+            append(" | Total: ${bars.size}")
         }
 
         return CandleSignal(
@@ -265,7 +275,9 @@ object CandleAnalyzer {
                     current < bars[i + distance].topY
             }
 
-            if (isSwingHigh) result.add(Swing(i, current))
+            if (isSwingHigh) {
+                result.add(Swing(i, current))
+            }
         }
 
         return result
@@ -283,7 +295,9 @@ object CandleAnalyzer {
                     current > bars[i + distance].bottomY
             }
 
-            if (isSwingLow) result.add(Swing(i, current))
+            if (isSwingLow) {
+                result.add(Swing(i, current))
+            }
         }
 
         return result
@@ -301,12 +315,14 @@ object CandleAnalyzer {
             return "Doji"
         }
 
-        if (current.lowerWick >= body * 2 &&
+        if (
+            current.lowerWick >= body * 2 &&
             current.upperWick <= body &&
             trend < 0
         ) return "Hammer"
 
-        if (current.upperWick >= body * 2 &&
+        if (
+            current.upperWick >= body * 2 &&
             current.lowerWick <= body &&
             trend > 0
         ) return "Shooting Star"
@@ -327,42 +343,41 @@ object CandleAnalyzer {
         return "None"
     }
 
+    // Detect individual red and green candles in Quotex chart.
     private fun detectCandles(bitmap: Bitmap): List<Bar> {
 
         if (bitmap.width < 100 || bitmap.height < 100) {
             return emptyList()
         }
 
-        val left = (bitmap.width * 0.01).toInt()
-        val right = (bitmap.width * 0.60).toInt()
-        val top = (bitmap.height * 0.13).toInt()
-        val bottom = (bitmap.height * 0.72).toInt()
+        // Based on the supplied Quotex screenshot.
+        val left = (bitmap.width * 0.00f).toInt()
+        val right = (bitmap.width * 0.57f).toInt()
+        val top = (bitmap.height * 0.12f).toInt()
+        val bottom = (bitmap.height * 0.69f).toInt()
 
         val width = right - left
         val height = bottom - top
 
         if (width <= 0 || height <= 0) return emptyList()
 
-        val redCounts = IntArray(width)
-        val greenCounts = IntArray(width)
+        val types = IntArray(width)
 
+        // Count colored pixels in every vertical column.
         for (x in 0 until width) {
+            var green = 0
+            var red = 0
+
             for (y in 0 until height) {
-                val type = colorType(bitmap.getPixel(left + x, top + y))
-                if (type == 1) greenCounts[x]++
-                if (type == 2) redCounts[x]++
+                when (colorType(bitmap.getPixel(left + x, top + y))) {
+                    1 -> green++
+                    2 -> red++
+                }
             }
-        }
 
-        val columnTypes = IntArray(width)
-
-        for (x in 0 until width) {
-            val green = greenCounts[x]
-            val red = redCounts[x]
-
-            columnTypes[x] = when {
-                green >= 2 && green > red -> 1
-                red >= 2 && red > green -> 2
+            types[x] = when {
+                green >= 3 && green > red * 1.3 -> 1
+                red >= 3 && red > green * 1.3 -> 2
                 else -> 0
             }
         }
@@ -371,45 +386,51 @@ object CandleAnalyzer {
         var x = 0
 
         while (x < width) {
-            val type = columnTypes[x]
+
+            val type = types[x]
 
             if (type == 0) {
                 x++
                 continue
             }
 
-            val startX = x
-            var endX = x
+            val start = x
+            var end = x
             x++
 
-            while (x < width && columnTypes[x] == type) {
-                endX = x
-                x++
+            while (x < width) {
+                if (types[x] == type) {
+                    end = x
+                    x++
+                } else if (
+                    x + 1 < width &&
+                    types[x] == 0 &&
+                    types[x + 1] == type
+                ) {
+                    end = x + 1
+                    x += 2
+                } else {
+                    break
+                }
             }
 
-            while (x + 1 < width &&
-                columnTypes[x] == 0 &&
-                columnTypes[x + 1] == type
-            ) {
-                endX = x + 1
-                x += 2
-            }
+            val candleWidth = end - start + 1
 
-            val candleWidth = endX - startX + 1
-            if (candleWidth > 30) continue
+            if (candleWidth > 25) continue
 
-            val rowCounts = IntArray(height)
+            val rows = IntArray(height)
             var minY = height
             var maxY = -1
 
-            for (cx in startX..endX) {
+            for (cx in start..end) {
                 for (cy in 0 until height) {
-                    val pixelType = colorType(
-                        bitmap.getPixel(left + cx, top + cy)
-                    )
 
-                    if (pixelType == type) {
-                        rowCounts[cy]++
+                    if (
+                        colorType(
+                            bitmap.getPixel(left + cx, top + cy)
+                        ) == type
+                    ) {
+                        rows[cy]++
                         minY = minOf(minY, cy)
                         maxY = maxOf(maxY, cy)
                     }
@@ -418,25 +439,31 @@ object CandleAnalyzer {
 
             if (maxY < minY) continue
 
-            val peak = rowCounts.maxOrNull() ?: 0
-            if (peak < 2) continue
+            val peak = rows.maxOrNull() ?: 0
+            if (peak < 1) continue
 
-            val threshold = maxOf(2, ceil(peak * 0.45).toInt())
+            val threshold = maxOf(1, (peak * 0.40f).toInt())
 
-            val peakY = rowCounts.indices.maxByOrNull {
-                rowCounts[it]
+            val peakY = rows.indices.maxByOrNull {
+                rows[it]
             } ?: continue
 
             var bodyTop = peakY
             var bodyBottom = peakY
 
-            while (bodyTop > minY &&
-                rowCounts[bodyTop - 1] >= threshold
-            ) bodyTop--
+            while (
+                bodyTop > minY &&
+                rows[bodyTop - 1] >= threshold
+            ) {
+                bodyTop--
+            }
 
-            while (bodyBottom < maxY &&
-                rowCounts[bodyBottom + 1] >= threshold
-            ) bodyBottom++
+            while (
+                bodyBottom < maxY &&
+                rows[bodyBottom + 1] >= threshold
+            ) {
+                bodyBottom++
+            }
 
             val body = bodyBottom - bodyTop + 1
             val upperWick = bodyTop - minY
@@ -451,8 +478,12 @@ object CandleAnalyzer {
                     body = body,
                     upperWick = upperWick,
                     lowerWick = lowerWick,
-                    centerX = left + (startX + endX) / 2,
-                    closeY = if (type == 1) bodyTop + top else bodyBottom + top,
+                    centerX = left + (start + end) / 2,
+                    closeY = if (type == 1) {
+                        bodyTop + top
+                    } else {
+                        bodyBottom + top
+                    },
                     topY = minY + top,
                     bottomY = maxY + top,
                     bodyTop = bodyTop + top,
