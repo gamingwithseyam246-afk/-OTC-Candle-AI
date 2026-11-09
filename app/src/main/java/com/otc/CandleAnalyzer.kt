@@ -254,11 +254,11 @@ object CandleAnalyzer {
         }
 
         val signal = when {
-            confidence < 25 -> "WAIT"
-            score >= 5 -> "UP"
-            score <= -5 -> "DOWN"
-            else -> "WAIT"
-        }
+    confidence < 20 -> "WAIT"
+    score >= 4 -> "UP"
+    score <= -4 -> "DOWN"
+    else -> "WAIT"
+}
 
         val structureText = when {
             higherHigh && higherLow ->
