@@ -1,3 +1,4 @@
+
 package com.otc.candleai
 
 import android.app.Notification
@@ -9,9 +10,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
 import android.graphics.PixelFormat
-import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
-import android.media.Image
 import android.media.ImageReader
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
@@ -19,66 +18,29 @@ import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.IBinder
-import android.os.Looper
-import android.util.DisplayMetrics
-import android.view.WindowManager
+import android.os.SystemClock
+import android.util.Log
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.regex.Pattern
-import kotlin.math.abs
 
 class CaptureService : Service() {
 
-    companion object {
-        const val ACTION_START = "com.otc.candleai.START_CAPTURE"
-        const val ACTION_STOP = "com.otc.candleai.STOP_CAPTURE"
-        const val ACTION_UPDATE = "com.otc.candleai.ANALYSIS_UPDATE"
-
-        const val EXTRA_RESULT_CODE = "resultCode"
-        const val EXTRA_DATA = "data"
-
-        private const val CHANNEL_ID = "candle_capture_channel"
-        private const val NOTIFICATION_ID = 2001
-    }
-
-    private var mediaProjection: MediaProjection? = null
-    private var virtualDisplay: VirtualDisplay? = null
-    private var imageReader: ImageReader? = null
-
-    private var workerThread: HandlerThread? = null
-    private var workerHandler: Handler? = null
-
-    private val mainHandler = Handler(Looper.getMainLooper())
-
-    private val recognizer by lazy {
-        TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
-    }
+    private var projection: MediaProjection? = null
+    private var reader: ImageReader? = null
+    private var worker: HandlerThread? = null
+    private var display: VirtualDisplay? = null
+    private var projectionCallback: MediaProjection.Callback? = null
+    private var recognizer: com.google.mlkit.vision.text.TextRecognizer? = null
 
     private val ocrRunning = AtomicBoolean(false)
     private val pendingAnalysis = AtomicBoolean(false)
-    private val pendingCompletedAnalysis = AtomicBoolean(false)
 
-    private var screenWidth = 0
-    private var screenHeight = 0
-    private var screenDensity = 0
+    private var lastOcrTime = 0L
 
+    @Volatile
     private var previousSecondsRemaining: Int? = null
-    private var timerDirection = 0
-
-    private var lastAnalysisTime = 0L
-    private var lastTimerValue: Int? = null
-
-    private val analysisIntervalMs = 3000L
-
-    override fun onBind(intent: Intent?): IBinder? = null
-
-    override fun onCreate() {
-        super.onCreate()
-        createNotificationChannel()
-        startWorker()
-    }
 
     override fun onStartCommand(
         intent: Intent?,
@@ -86,428 +48,370 @@ class CaptureService : Service() {
         startId: Int
     ): Int {
 
-        when (intent?.action) {
-            ACTION_STOP -> {
-                stopCapture()
-                stopSelf()
-                return START_NOT_STICKY
-            }
+        createNotificationChannel()
 
-            ACTION_START -> {
-                val resultCode = intent.getIntExtra(
-                    EXTRA_RESULT_CODE,
-                    0
-                )
-
-                val data = if (Build.VERSION.SDK_INT >= 33) {
-                    intent.getParcelableExtra(
-                        EXTRA_DATA,
-                        Intent::class.java
-                    )
-                } else {
-                    @Suppress("DEPRECATION")
-                    intent.getParcelableExtra(EXTRA_DATA)
-                }
-
-                if (data != null) {
-                    startForegroundServiceNotification()
-                    startCapture(resultCode, data)
-                }
-            }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(
+                1,
+                createNotification(),
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+            )
+        } else {
+            startForeground(1, createNotification())
         }
 
-        return START_STICKY
-    }
+        if (projection != null) return START_NOT_STICKY
 
-    private fun startWorker() {
-        workerThread = HandlerThread("CandleCaptureWorker")
-        workerThread?.start()
-        workerHandler = Handler(workerThread!!.looper)
-    }
+        val resultCode = intent?.getIntExtra("resultCode", 0)
+            ?: return stopWithError()
 
-    private fun startCapture(
-        resultCode: Int,
-        data: Intent
-    ) {
+        val data: Intent? = if (Build.VERSION.SDK_INT >= 33) {
+            intent.getParcelableExtra("data", Intent::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            intent.getParcelableExtra("data")
+        }
 
-        if (mediaProjection != null) return
+        if (data == null) return stopWithError()
 
-        val metrics = DisplayMetrics()
+        try {
+            recognizer = TextRecognition.getClient(
+                TextRecognizerOptions.DEFAULT_OPTIONS
+            )
 
-        @Suppress("DEPRECATION")
-        val windowManager =
-            getSystemService(Context.WINDOW_SERVICE) as WindowManager
-
-        @Suppress("DEPRECATION")
-        windowManager.defaultDisplay.getRealMetrics(metrics)
-
-        screenWidth = metrics.widthPixels
-        screenHeight = metrics.heightPixels
-        screenDensity = metrics.densityDpi
-
-        val projectionManager =
-            getSystemService(
+            val manager = getSystemService(
                 Context.MEDIA_PROJECTION_SERVICE
             ) as MediaProjectionManager
 
-        mediaProjection = projectionManager.getMediaProjection(
-            resultCode,
-            data
-        )
+            val currentProjection =
+                manager.getMediaProjection(resultCode, data)
 
-        imageReader = ImageReader.newInstance(
-            screenWidth,
-            screenHeight,
-            PixelFormat.RGBA_8888,
-            2
-        )
+            projection = currentProjection
 
-        virtualDisplay = mediaProjection?.createVirtualDisplay(
-            "CandleAI_Display",
-            screenWidth,
-            screenHeight,
-            screenDensity,
-            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-            imageReader?.surface,
-            null,
-            workerHandler
-        )
+            val metrics = resources.displayMetrics
+            val width = metrics.widthPixels
+            val height = metrics.heightPixels
+            val density = metrics.densityDpi
 
-        imageReader?.setOnImageAvailableListener(
-            { reader ->
-                processLatestImage(reader)
-            },
-            workerHandler
-        )
+            worker = HandlerThread("CaptureWorker").also {
+                it.start()
+            }
 
-        previousSecondsRemaining = null
-        timerDirection = 0
-        lastAnalysisTime = 0L
-        lastTimerValue = null
+            val handler = Handler(worker!!.looper)
 
-        pendingAnalysis.set(false)
-        pendingCompletedAnalysis.set(false)
+            reader = ImageReader.newInstance(
+                width,
+                height,
+                PixelFormat.RGBA_8888,
+                2
+            )
+
+            projectionCallback = object : MediaProjection.Callback() {
+                override fun onStop() {
+                    stopSelf()
+                }
+            }
+
+            currentProjection.registerCallback(
+                projectionCallback!!,
+                handler
+            )
+
+            reader!!.setOnImageAvailableListener(
+                { imageReader ->
+                    analyzeFrame(imageReader, width)
+                },
+                handler
+            )
+
+            display = currentProjection.createVirtualDisplay(
+                "OTCCandleAI",
+                width,
+                height,
+                density,
+                0,
+                reader!!.surface,
+                null,
+                handler
+            )
+
+            Log.d("OTCCandleAI", "Screen capture started")
+
+        } catch (e: Exception) {
+            Log.e("CaptureService", "Capture start failed", e)
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
+        return START_NOT_STICKY
     }
 
-    private fun processLatestImage(reader: ImageReader) {
-
-        var image: Image? = null
+    private fun analyzeFrame(
+        imageReader: ImageReader,
+        width: Int
+    ) {
+        var image: android.media.Image? = null
+        var paddedBitmap: Bitmap? = null
+        var bitmap: Bitmap? = null
 
         try {
-            image = reader.acquireLatestImage() ?: return
+            image = imageReader.acquireLatestImage() ?: return
 
-            val planes = image.planes
-            val buffer = planes[0].buffer
+            val plane = image.planes[0]
+            val pixelStride = plane.pixelStride
+            val rowStride = plane.rowStride
+            val rowPadding = rowStride - pixelStride * width
 
-            val pixelStride = planes[0].pixelStride
-            val rowStride = planes[0].rowStride
-
-            val rowPadding =
-                rowStride - pixelStride * screenWidth
-
-            val bitmapWidth =
-                screenWidth + rowPadding / pixelStride
-
-            val fullBitmap = Bitmap.createBitmap(
-                bitmapWidth,
-                screenHeight,
+            paddedBitmap = Bitmap.createBitmap(
+                width + rowPadding / pixelStride,
+                image.height,
                 Bitmap.Config.ARGB_8888
             )
 
-            fullBitmap.copyPixelsFromBuffer(buffer)
+            paddedBitmap.copyPixelsFromBuffer(plane.buffer)
 
-            val bitmap = Bitmap.createBitmap(
-                fullBitmap,
+            bitmap = Bitmap.createBitmap(
+                paddedBitmap,
                 0,
                 0,
-                screenWidth,
-                screenHeight
+                width,
+                image.height
             )
 
-            fullBitmap.recycle()
+            val now = SystemClock.elapsedRealtime()
 
-            image.close()
-            image = null
+            if (
+                now - lastOcrTime >= 1000 &&
+                ocrRunning.compareAndSet(false, true)
+            ) {
+                lastOcrTime = now
+                readChartTimer(bitmap)
+            }
 
-            val completed = pendingCompletedAnalysis.getAndSet(false)
+            if (pendingAnalysis.compareAndSet(true, false)) {
 
-            if (completed) {
-                pendingAnalysis.set(false)
-                runAnalysis(bitmap, false, true)
-            } else if (pendingAnalysis.getAndSet(false)) {
-                runAnalysis(bitmap, true, false)
-            } else {
-                runOcr(bitmap)
+                // Corrected: CandleAnalyzer accepts only one argument.
+                val result = CandleAnalyzer.analyze(bitmap)
+
+                val update = Intent(
+                    "com.otc.candleai.ANALYSIS_UPDATE"
+                ).apply {
+                    setPackage(packageName)
+                    putExtra("signal", result.signal)
+                    putExtra("confidence", result.confidence)
+                    putExtra("message", result.message)
+                    putExtra("newMinuteAnalysis", true)
+                }
+
+                sendBroadcast(update)
+
+                Log.d(
+                    "OTCCandleAI",
+                    "New analysis: ${result.signal}, confidence: ${result.confidence}"
+                )
             }
 
         } catch (e: Exception) {
+            Log.e("CaptureService", "Frame analysis failed", e)
+        } finally {
+            bitmap?.recycle()
+            paddedBitmap?.recycle()
             image?.close()
         }
     }
 
-    private fun runAnalysis(
-        bitmap: Bitmap,
-        includeLiveCandle: Boolean,
-        newMinute: Boolean
-    ) {
+    private fun readChartTimer(bitmap: Bitmap) {
+        var ocrBitmap: Bitmap? = null
 
         try {
-            val result = CandleAnalyzer.analyze(
-                bitmap,
-                includeLiveCandle
-            )
+            val screenWidth = bitmap.width
+            val screenHeight = bitmap.height
 
-            val intent = Intent(ACTION_UPDATE).apply {
-                setPackage(packageName)
+            ocrBitmap = bitmap.copy(Bitmap.Config.ARGB_8888, false)
 
-                putExtra("signal", result.signal)
-                putExtra("confidence", result.confidence)
-                putExtra("greenCount", result.greenCount)
-                putExtra("redCount", result.redCount)
-                putExtra("message", result.message)
-                putExtra("newMinuteAnalysis", newMinute)
+            val inputImage = InputImage.fromBitmap(ocrBitmap, 0)
+            val imageToRecycle = ocrBitmap
+            ocrBitmap = null
+
+            val textRecognizer = recognizer
+
+            if (textRecognizer == null) {
+                imageToRecycle.recycle()
+                ocrRunning.set(false)
+                return
             }
 
-            sendBroadcast(intent)
+            textRecognizer.process(inputImage)
+                .addOnSuccessListener { visionText ->
 
-        } catch (e: Exception) {
-            e.printStackTrace()
-        } finally {
-            if (!bitmap.isRecycled) {
-                bitmap.recycle()
-            }
-        }
-    }
+                    val timerPattern = Regex(
+                        """(?<!\d)(\d{1,2}):([0-5]\d)(?!\d)"""
+                    )
 
-    private fun runOcr(bitmap: Bitmap) {
+                    var detectedTimer: String? = null
+                    var detectedSeconds: Int? = null
 
-        if (!ocrRunning.compareAndSet(false, true)) {
-            if (!bitmap.isRecycled) bitmap.recycle()
-            return
-        }
+                    for (block in visionText.textBlocks) {
+                        val bounds = block.boundingBox ?: continue
 
-        val inputImage = InputImage.fromBitmap(bitmap, 0)
+                        val centerX =
+                            bounds.centerX().toFloat() / screenWidth
 
-        recognizer.process(inputImage)
-            .addOnSuccessListener { result ->
+                        val centerY =
+                            bounds.centerY().toFloat() / screenHeight
 
-                try {
-                    val timer = findTimer(result.text)
+                        if (
+                            centerX < 0.45f ||
+                            centerX > 0.98f ||
+                            centerY < 0.30f ||
+                            centerY > 0.78f
+                        ) {
+                            continue
+                        }
 
-                    if (timer != null) {
-                        handleTimer(timer)
+                        val normalized = block.text
+                            .replace('O', '0')
+                            .replace('o', '0')
+
+                        val match = timerPattern.find(normalized)
+                            ?: continue
+
+                        val minutes =
+                            match.groupValues[1].toIntOrNull() ?: continue
+
+                        val seconds =
+                            match.groupValues[2].toIntOrNull() ?: continue
+
+                        detectedTimer = match.value
+                        detectedSeconds = minutes * 60 + seconds
+                        break
                     }
 
-                } catch (e: Exception) {
-                    e.printStackTrace()
+                    val remaining = detectedSeconds
+
+                    if (remaining != null && detectedTimer != null) {
+                        val previous = previousSecondsRemaining
+
+                        if (previous == null) {
+                            pendingAnalysis.set(true)
+
+                            Log.d(
+                                "OTCCandleAI",
+                                "Initial analysis queued"
+                            )
+                        } else if (remaining > previous + 15) {
+                            pendingAnalysis.set(true)
+
+                            Log.d(
+                                "OTCCandleAI",
+                                "New candle minute detected: $detectedTimer"
+                            )
+                        }
+
+                        previousSecondsRemaining = remaining
+
+                        val update = Intent(
+                            "com.otc.candleai.ANALYSIS_UPDATE"
+                        ).apply {
+                            setPackage(packageName)
+                            putExtra("timerText", detectedTimer)
+                            putExtra("secondsRemaining", remaining)
+                            putExtra("timerDetected", true)
+                        }
+
+                        sendBroadcast(update)
+
+                        Log.d(
+                            "OTCCandleAI",
+                            "Chart timer: $detectedTimer"
+                        )
+                    } else {
+                        Log.d(
+                            "OTCCandleAI",
+                            "Chart timer not found"
+                        )
+                    }
                 }
-            }
-            .addOnFailureListener {
-                it.printStackTrace()
-            }
-            .addOnCompleteListener {
-
-                ocrRunning.set(false)
-
-                if (!bitmap.isRecycled) {
-                    bitmap.recycle()
+                .addOnFailureListener { error ->
+                    Log.e(
+                        "OTCCandleAI",
+                        "Timer OCR failed",
+                        error
+                    )
                 }
-            }
-    }
-
-    private fun findTimer(text: String): Int? {
-
-        val pattern = Pattern.compile(
-            "(?<!\\d)(\\d{1,2}):(\\d{2})(?!\\d)"
-        )
-
-        val matcher = pattern.matcher(text)
-
-        while (matcher.find()) {
-
-            val minutes = matcher.group(1)?.toIntOrNull() ?: continue
-            val seconds = matcher.group(2)?.toIntOrNull() ?: continue
-
-            if (seconds !in 0..59) continue
-            if (minutes !in 0..59) continue
-
-            val totalSeconds = minutes * 60 + seconds
-
-            if (totalSeconds in 0..3600) {
-                return totalSeconds
-            }
-        }
-
-        return null
-    }
-
-    private fun handleTimer(remaining: Int) {
-
-        val now = System.currentTimeMillis()
-        val previous = previousSecondsRemaining
-
-        var newMinute = false
-
-        if (previous == null) {
-
-            // প্রথম টাইমার পাওয়া মাত্রই বিশ্লেষণ শুরু
-            pendingAnalysis.set(true)
-
-        } else {
-
-            val difference = remaining - previous
-
-            // স্বাভাবিক টাইমার চলার দিক নির্ণয়
-            if (abs(difference) in 1..15) {
-
-                if (difference < 0) {
-                    timerDirection = -1
-                } else if (difference > 0) {
-                    timerDirection = 1
+                .addOnCompleteListener {
+                    imageToRecycle.recycle()
+                    ocrRunning.set(false)
                 }
-            }
-
-            // কাউন্টডাউন: 00:01 থেকে 01:00
-            val countdownReset =
-                timerDirection <= 0 &&
-                difference > 15
-
-            // কাউন্টআপ: 00:59 থেকে 00:00
-            val countupReset =
-                timerDirection >= 0 &&
-                difference < -15
-
-            if (countdownReset || countupReset) {
-
-                newMinute = true
-
-                pendingCompletedAnalysis.set(true)
-                pendingAnalysis.set(false)
-
-                lastAnalysisTime = now
-            } else {
-
-                // প্রতি প্রায় ৩ সেকেন্ডে লাইভ পর্যবেক্ষণ
-                if (
-                    remaining != lastTimerValue &&
-                    now - lastAnalysisTime >= analysisIntervalMs
-                ) {
-                    pendingAnalysis.set(true)
-                    lastAnalysisTime = now
-                }
-            }
-        }
-
-        previousSecondsRemaining = remaining
-        lastTimerValue = remaining
-
-        // টাইমার আপডেট আলাদা পাঠানো হয়।
-        // এতে আগের সিগন্যাল মুছে যাবে না।
-        val timerIntent = Intent(ACTION_UPDATE).apply {
-            setPackage(packageName)
-
-            putExtra("timerText", formatTimer(remaining))
-            putExtra("secondsRemaining", remaining)
-            putExtra("timerDetected", true)
-            putExtra("newMinuteDetected", newMinute)
-        }
-
-        sendBroadcast(timerIntent)
-    }
-
-    private fun formatTimer(seconds: Int): String {
-
-        val minutes = seconds / 60
-        val remainingSeconds = seconds % 60
-
-        return String.format(
-            "%02d:%02d",
-            minutes,
-            remainingSeconds
-        )
-    }
-
-    private fun stopCapture() {
-
-        try {
-            virtualDisplay?.release()
-            virtualDisplay = null
-
-            imageReader?.close()
-            imageReader = null
-
-            mediaProjection?.stop()
-            mediaProjection = null
-
-            pendingAnalysis.set(false)
-            pendingCompletedAnalysis.set(false)
-
-            previousSecondsRemaining = null
-            timerDirection = 0
 
         } catch (e: Exception) {
-            e.printStackTrace()
+            ocrBitmap?.recycle()
+            ocrRunning.set(false)
+            Log.e("OTCCandleAI", "Timer reading error", e)
         }
     }
 
     private fun createNotificationChannel() {
-
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-
             val channel = NotificationChannel(
-                CHANNEL_ID,
-                "Candle AI Capture",
+                "capture_channel",
+                "Screen Capture",
                 NotificationManager.IMPORTANCE_LOW
             )
 
-            val manager =
-                getSystemService(NotificationManager::class.java)
-
-            manager.createNotificationChannel(channel)
+            getSystemService(NotificationManager::class.java)
+                .createNotificationChannel(channel)
         }
     }
 
-    private fun startForegroundServiceNotification() {
-
-        val notification = Notification.Builder(
-            this,
-            CHANNEL_ID
-        )
-            .setContentTitle("Candle AI চলছে")
-            .setContentText("চার্ট পর্যবেক্ষণ করা হচ্ছে")
-            .setSmallIcon(android.R.drawable.ic_menu_view)
-            .build()
-
-        if (Build.VERSION.SDK_INT >= 29) {
-
-            startForeground(
-                NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
-            )
-
+    private fun createNotification(): Notification {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            Notification.Builder(this, "capture_channel")
+                .setContentTitle("OTC Candle AI")
+                .setContentText("Screen analysis running")
+                .setSmallIcon(android.R.drawable.ic_menu_view)
+                .build()
         } else {
-
-            startForeground(
-                NOTIFICATION_ID,
-                notification
-            )
+            @Suppress("DEPRECATION")
+            Notification.Builder(this)
+                .setContentTitle("OTC Candle AI")
+                .setContentText("Screen analysis running")
+                .setSmallIcon(android.R.drawable.ic_menu_view)
+                .build()
         }
+    }
+
+    private fun stopWithError(): Int {
+        stopSelf()
+        return START_NOT_STICKY
     }
 
     override fun onDestroy() {
+        reader?.setOnImageAvailableListener(null, null)
 
-        stopCapture()
+        display?.release()
+        display = null
 
-        try {
-            recognizer.close()
-        } catch (_: Exception) {
+        reader?.close()
+        reader = null
+
+        projectionCallback?.let { callback ->
+            projection?.unregisterCallback(callback)
         }
 
-        workerThread?.quitSafely()
-        workerThread = null
-        workerHandler = null
+        projectionCallback = null
+
+        projection?.stop()
+        projection = null
+
+        recognizer?.close()
+        recognizer = null
+
+        worker?.quitSafely()
+        worker = null
 
         super.onDestroy()
     }
+
+    override fun onBind(intent: Intent?): IBinder? = null
 }
