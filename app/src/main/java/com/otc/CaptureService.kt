@@ -32,6 +32,7 @@ class CaptureService : Service() {
     private var worker: HandlerThread? = null
     private var display: VirtualDisplay? = null
     private var projectionCallback: MediaProjection.Callback? = null
+
     private var recognizer: com.google.mlkit.vision.text.TextRecognizer? = null
 
     private val ocrRunning = AtomicBoolean(false)
@@ -41,6 +42,21 @@ class CaptureService : Service() {
 
     @Volatile
     private var previousSecondsRemaining: Int? = null
+
+    @Volatile
+    private var lastAnalysisTriggerTime = 0L
+
+    private val analysisLock = Any()
+
+    companion object {
+        private const val TAG = "OTCCandleAI"
+        private const val ACTION_UPDATE =
+            "com.otc.candleai.ANALYSIS_UPDATE"
+
+        private const val OCR_INTERVAL_MS = 1000L
+        private const val MIN_ANALYSIS_GAP_MS = 45000L
+        private const val TIMER_RESET_THRESHOLD = 15
+    }
 
     override fun onStartCommand(
         intent: Intent?,
@@ -135,15 +151,41 @@ class CaptureService : Service() {
                 handler
             )
 
-            Log.d("OTCCandleAI", "Screen capture started")
+            Log.d(TAG, "Screen capture started")
 
         } catch (e: Exception) {
-            Log.e("CaptureService", "Capture start failed", e)
+            Log.e(TAG, "Capture start failed", e)
             stopSelf()
             return START_NOT_STICKY
         }
 
         return START_NOT_STICKY
+    }
+
+    private fun queueAnalysis(reason: String) {
+        synchronized(analysisLock) {
+            val now = SystemClock.elapsedRealtime()
+
+            if (lastAnalysisTriggerTime == 0L) {
+                lastAnalysisTriggerTime = now
+                pendingAnalysis.set(true)
+                Log.d(TAG, "Analysis queued: $reason")
+                return
+            }
+
+            val elapsed = now - lastAnalysisTriggerTime
+
+            if (elapsed >= MIN_ANALYSIS_GAP_MS) {
+                lastAnalysisTriggerTime = now
+                pendingAnalysis.set(true)
+                Log.d(TAG, "Analysis queued: $reason")
+            } else {
+                Log.d(
+                    TAG,
+                    "Analysis ignored by cooldown: ${elapsed}ms"
+                )
+            }
+        }
     }
 
     private fun analyzeFrame(
@@ -181,7 +223,7 @@ class CaptureService : Service() {
             val now = SystemClock.elapsedRealtime()
 
             if (
-                now - lastOcrTime >= 1000 &&
+                now - lastOcrTime >= OCR_INTERVAL_MS &&
                 ocrRunning.compareAndSet(false, true)
             ) {
                 lastOcrTime = now
@@ -191,9 +233,7 @@ class CaptureService : Service() {
             if (pendingAnalysis.compareAndSet(true, false)) {
                 val result = CandleAnalyzer.analyze(bitmap)
 
-                val update = Intent(
-                    "com.otc.candleai.ANALYSIS_UPDATE"
-                ).apply {
+                val update = Intent(ACTION_UPDATE).apply {
                     setPackage(packageName)
                     putExtra("signal", result.signal)
                     putExtra("confidence", result.confidence)
@@ -204,13 +244,13 @@ class CaptureService : Service() {
                 sendBroadcast(update)
 
                 Log.d(
-                    "OTCCandleAI",
-                    "New analysis: ${result.signal}, confidence: ${result.confidence}"
+                    TAG,
+                    "Analysis result: ${result.signal}, confidence: ${result.confidence}"
                 )
             }
 
         } catch (e: Exception) {
-            Log.e("CaptureService", "Frame analysis failed", e)
+            Log.e(TAG, "Frame analysis failed", e)
         } finally {
             bitmap?.recycle()
             paddedBitmap?.recycle()
@@ -225,7 +265,10 @@ class CaptureService : Service() {
             val screenWidth = bitmap.width
             val screenHeight = bitmap.height
 
-            ocrBitmap = bitmap.copy(Bitmap.Config.ARGB_8888, false)
+            ocrBitmap = bitmap.copy(
+                Bitmap.Config.ARGB_8888,
+                false
+            )
 
             val inputImage = InputImage.fromBitmap(ocrBitmap, 0)
             val imageToRecycle = ocrBitmap
@@ -246,8 +289,13 @@ class CaptureService : Service() {
                         """(?<!\d)(\d{1,2}):([0-5]\d)(?!\d)"""
                     )
 
-                    var detectedTimer: String? = null
-                    var detectedSeconds: Int? = null
+                    data class TimerCandidate(
+                        val text: String,
+                        val seconds: Int,
+                        val x: Float
+                    )
+
+                    val candidates = mutableListOf<TimerCandidate>()
 
                     for (block in visionText.textBlocks) {
                         val bounds = block.boundingBox ?: continue
@@ -280,39 +328,41 @@ class CaptureService : Service() {
                         val seconds =
                             match.groupValues[2].toIntOrNull() ?: continue
 
-                        detectedTimer = match.value
-                        detectedSeconds = minutes * 60 + seconds
-                        break
+                        val totalSeconds = minutes * 60 + seconds
+
+                        if (totalSeconds > 599) continue
+
+                        candidates.add(
+                            TimerCandidate(
+                                text = match.value,
+                                seconds = totalSeconds,
+                                x = centerX
+                            )
+                        )
                     }
 
-                    val remaining = detectedSeconds
+                    // Prefer the timer farthest to the right in the chart area.
+                    val candidate = candidates.maxByOrNull { it.x }
 
-                    if (remaining != null && detectedTimer != null) {
+                    if (candidate != null) {
+                        val remaining = candidate.seconds
                         val previous = previousSecondsRemaining
 
                         if (previous == null) {
-                            pendingAnalysis.set(true)
-
-                            Log.d(
-                                "OTCCandleAI",
-                                "Initial analysis queued"
-                            )
-                        } else if (remaining > previous + 30) {
-                            pendingAnalysis.set(true)
-
-                            Log.d(
-                                "OTCCandleAI",
-                                "New candle minute detected: $detectedTimer"
+                            queueAnalysis("Initial timer detected")
+                        } else if (
+                            remaining > previous + TIMER_RESET_THRESHOLD
+                        ) {
+                            queueAnalysis(
+                                "New minute detected: ${candidate.text}"
                             )
                         }
 
                         previousSecondsRemaining = remaining
 
-                        val update = Intent(
-                            "com.otc.candleai.ANALYSIS_UPDATE"
-                        ).apply {
+                        val update = Intent(ACTION_UPDATE).apply {
                             setPackage(packageName)
-                            putExtra("timerText", detectedTimer)
+                            putExtra("timerText", candidate.text)
                             putExtra("secondsRemaining", remaining)
                             putExtra("timerDetected", true)
                         }
@@ -320,22 +370,15 @@ class CaptureService : Service() {
                         sendBroadcast(update)
 
                         Log.d(
-                            "OTCCandleAI",
-                            "Chart timer: $detectedTimer"
+                            TAG,
+                            "Chart timer: ${candidate.text}"
                         )
                     } else {
-                        Log.d(
-                            "OTCCandleAI",
-                            "Chart timer not found"
-                        )
+                        Log.d(TAG, "Chart timer not found")
                     }
                 }
                 .addOnFailureListener { error ->
-                    Log.e(
-                        "OTCCandleAI",
-                        "Timer OCR failed",
-                        error
-                    )
+                    Log.e(TAG, "Timer OCR failed", error)
                 }
                 .addOnCompleteListener {
                     imageToRecycle.recycle()
@@ -345,7 +388,7 @@ class CaptureService : Service() {
         } catch (e: Exception) {
             ocrBitmap?.recycle()
             ocrRunning.set(false)
-            Log.e("OTCCandleAI", "Timer reading error", e)
+            Log.e(TAG, "Timer reading error", e)
         }
     }
 
