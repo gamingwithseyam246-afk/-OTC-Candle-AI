@@ -52,9 +52,7 @@ class MainActivity : Activity() {
             text = "START ANALYSIS"
 
             setOnClickListener {
-                if (Build.VERSION.SDK_INT >= 23 &&
-                    !Settings.canDrawOverlays(this@MainActivity)
-                ) {
+                if (!Settings.canDrawOverlays(this@MainActivity)) {
                     val intent = Intent(
                         Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
                         Uri.parse("package:$packageName")
@@ -137,6 +135,21 @@ class MainActivity : Activity() {
         if (requestCode == captureRequest) {
             if (resultCode == RESULT_OK && data != null) {
 
+                // প্রথমে প্যানেল চালু হবে
+                panelEnabled = true
+
+                prefs.edit()
+                    .putBoolean("panel_enabled", true)
+                    .apply()
+
+                startService(
+                    Intent(this, FloatingWindowService::class.java)
+                        .setAction(FloatingWindowService.ACTION_SHOW)
+                )
+
+                updatePanelButton()
+
+                // এরপর Screen Capture চালু হবে
                 val captureIntent = Intent(
                     this,
                     CaptureService::class.java
@@ -151,20 +164,8 @@ class MainActivity : Activity() {
                     startService(captureIntent)
                 }
 
-                panelEnabled = true
-
-                prefs.edit()
-                    .putBoolean("panel_enabled", true)
-                    .apply()
-
-                startService(
-                    Intent(this, FloatingWindowService::class.java)
-                        .setAction(FloatingWindowService.ACTION_SHOW)
-                )
-
-                updatePanelButton()
-
                 status.text = "Analysis চালু হয়েছে।"
+
             } else {
                 status.text = "Screen Capture অনুমতি পাওয়া যায়নি"
             }
