@@ -13,6 +13,7 @@ import android.os.IBinder
 import android.provider.Settings
 import android.view.Gravity
 import android.view.MotionEvent
+import android.view.View
 import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -52,7 +53,9 @@ class FloatingWindowService : Service() {
     }
 
     override fun onStartCommand(
-        intent: Intent?, flags: Int, startId: Int
+        intent: Intent?,
+        flags: Int,
+        startId: Int
     ): Int {
         if (!Settings.canDrawOverlays(this)) {
             stopSelf()
@@ -89,8 +92,8 @@ class FloatingWindowService : Service() {
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(5), dp(2), dp(5), dp(2))
-            setBackgroundColor(Color.rgb(20, 20, 20))
+            setPadding(dp(3), dp(1), dp(3), dp(1))
+            setBackgroundColor(Color.rgb(18, 18, 18))
         }
 
         val header = LinearLayout(this).apply {
@@ -99,16 +102,16 @@ class FloatingWindowService : Service() {
 
         val title = TextView(this).apply {
             text = "OTC AI"
-            textSize = 9f
+            textSize = 8f
             setTextColor(Color.WHITE)
-            setPadding(0, dp(3), dp(3), dp(3))
+            setPadding(0, dp(1), dp(2), dp(1))
         }
 
         val close = TextView(this).apply {
             text = "×"
-            textSize = 15f
+            textSize = 13f
             setTextColor(Color.WHITE)
-            setPadding(dp(5), 0, dp(3), 0)
+            setPadding(dp(3), 0, dp(2), 0)
             setOnClickListener { hidePanel() }
         }
 
@@ -117,20 +120,20 @@ class FloatingWindowService : Service() {
 
         signal = TextView(this).apply {
             text = "WAIT"
-            textSize = 14f
+            textSize = 12f
             setTextColor(Color.YELLOW)
         }
 
         score = TextView(this).apply {
             text = "Score: --"
-            textSize = 9f
+            textSize = 7f
             setTextColor(Color.WHITE)
         }
 
         info = TextView(this).apply {
             text = "Waiting..."
-            textSize = 8f
-            setTextColor(Color.WHITE)
+            textSize = 7f
+            setTextColor(Color.LTGRAY)
             maxLines = 2
         }
 
@@ -140,7 +143,7 @@ class FloatingWindowService : Service() {
         root.addView(info)
 
         val params = WindowManager.LayoutParams(
-            dp(112),
+            dp(96),
             WindowManager.LayoutParams.WRAP_CONTENT,
             if (Build.VERSION.SDK_INT >= 26)
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
@@ -154,34 +157,50 @@ class FloatingWindowService : Service() {
             y = dp(4)
         }
 
-        header.setOnTouchListener(object : android.view.View.OnTouchListener {
+        header.setOnTouchListener(object : View.OnTouchListener {
             var downX = 0f
             var downY = 0f
             var startX = 0
             var startY = 0
+            var moved = false
 
-            override fun onTouch(
-                v: android.view.View,
-                event: MotionEvent
-            ): Boolean {
+            override fun onTouch(v: View, event: MotionEvent): Boolean {
                 when (event.action) {
                     MotionEvent.ACTION_DOWN -> {
                         downX = event.rawX
                         downY = event.rawY
                         startX = params.x
                         startY = params.y
+                        moved = false
                         return true
                     }
 
                     MotionEvent.ACTION_MOVE -> {
-                        params.x = (startX + event.rawX - downX).toInt()
-                            .coerceIn(0, resources.displayMetrics.widthPixels - root.width)
-                        params.y = (startY + event.rawY - downY).toInt()
-                            .coerceIn(0, resources.displayMetrics.heightPixels - root.height)
+                        val dx = event.rawX - downX
+                        val dy = event.rawY - downY
 
-                        try {
-                            wm.updateViewLayout(root, params)
-                        } catch (_: Exception) {
+                        if (kotlin.math.abs(dx) > dp(3) ||
+                            kotlin.math.abs(dy) > dp(3)
+                        ) {
+                            moved = true
+                        }
+
+                        if (moved) {
+                            val maxX = (
+                                resources.displayMetrics.widthPixels - root.width
+                            ).coerceAtLeast(0)
+
+                            val maxY = (
+                                resources.displayMetrics.heightPixels - root.height
+                            ).coerceAtLeast(0)
+
+                            params.x = (startX + dx.toInt()).coerceIn(0, maxX)
+                            params.y = (startY + dy.toInt()).coerceIn(0, maxY)
+
+                            try {
+                                wm.updateViewLayout(root, params)
+                            } catch (_: Exception) {
+                            }
                         }
                         return true
                     }
@@ -213,6 +232,7 @@ class FloatingWindowService : Service() {
 
     override fun onDestroy() {
         hidePanel()
+
         if (registered) {
             try {
                 unregisterReceiver(receiver)
@@ -220,6 +240,7 @@ class FloatingWindowService : Service() {
             }
             registered = false
         }
+
         super.onDestroy()
     }
 
