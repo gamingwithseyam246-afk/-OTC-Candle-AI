@@ -41,7 +41,6 @@ class FloatingWindowService : Service() {
 
     private val analysisReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-
             if (intent?.action != "com.otc.candleai.ANALYSIS_UPDATE") return
             if (!intent.hasExtra("signal")) return
             if (floatingView == null) return
@@ -219,7 +218,6 @@ class FloatingWindowService : Service() {
             y = prefs.getInt(KEY_Y, 200)
         }
 
-        // Header ধরে প্যানেল সরানো যাবে
         title.setOnTouchListener(object : View.OnTouchListener {
 
             private var startX = 0
@@ -252,14 +250,23 @@ class FloatingWindowService : Service() {
                             dragging = true
                         }
 
-                        params.x = (startX + dx).coerceAtLeast(0)
-                        params.y = (startY + dy).coerceAtLeast(0)
+                        val screenWidth =
+                            resources.displayMetrics.widthPixels
+                        val screenHeight =
+                            resources.displayMetrics.heightPixels
+
+                        params.x = (startX + dx).coerceIn(
+                            0,
+                            (screenWidth - panel.width).coerceAtLeast(0)
+                        )
+
+                        params.y = (startY + dy).coerceIn(
+                            0,
+                            (screenHeight - panel.height).coerceAtLeast(0)
+                        )
 
                         try {
-                            windowManager.updateViewLayout(
-                                panel,
-                                params
-                            )
+                            windowManager.updateViewLayout(panel, params)
                         } catch (e: Exception) {
                             android.util.Log.e(
                                 "FloatingWindowService",
@@ -271,7 +278,8 @@ class FloatingWindowService : Service() {
                         return true
                     }
 
-                    MotionEvent.ACTION_UP -> {
+                    MotionEvent.ACTION_UP,
+                    MotionEvent.ACTION_CANCEL -> {
                         if (dragging) {
                             savePosition(params)
                         }
