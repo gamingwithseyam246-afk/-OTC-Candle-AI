@@ -11,7 +11,6 @@ import android.graphics.PixelFormat
 import android.os.Build
 import android.os.IBinder
 import android.provider.Settings
-import android.text.TextUtils
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -103,7 +102,7 @@ class FloatingWindowService : Service() {
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(2), 0, dp(2), 0)
+            setPadding(dp(2), dp(1), dp(2), dp(1))
             setBackgroundColor(Color.rgb(12, 12, 12))
         }
 
@@ -124,11 +123,11 @@ class FloatingWindowService : Service() {
             textSize = 8f
             includeFontPadding = false
             setTextColor(Color.WHITE)
-            setPadding(dp(2), 0, dp(1), 0)
+            setPadding(dp(2), 0, 0, 0)
             setOnClickListener { hidePanel() }
         }
 
-        header.addView(title, LinearLayout.LayoutParams(0, -2, 1f))
+        header.addView(title)
         header.addView(close)
 
         signal = TextView(this).apply {
@@ -152,12 +151,11 @@ class FloatingWindowService : Service() {
             textSize = 6f
             includeFontPadding = false
             setTextColor(Color.LTGRAY)
+            setSingleLine(false)
             maxLines = Int.MAX_VALUE
             ellipsize = null
-            setSingleLine(false)
-            maxWidth = (
-                resources.displayMetrics.widthPixels - dp(8)
-            ).coerceAtLeast(dp(80))
+            maxWidth = (resources.displayMetrics.widthPixels - dp(8))
+                .coerceAtLeast(dp(80))
         }
 
         root.addView(header)
@@ -180,7 +178,7 @@ class FloatingWindowService : Service() {
             y = dp(4)
         }
 
-        title.setOnTouchListener(object : View.OnTouchListener {
+        header.setOnTouchListener(object : View.OnTouchListener {
             var downX = 0f
             var downY = 0f
             var startX = 0
