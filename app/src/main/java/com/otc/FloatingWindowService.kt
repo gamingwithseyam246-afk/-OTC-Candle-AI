@@ -17,6 +17,7 @@ import android.view.View
 import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.TextView
+import kotlin.math.abs
 
 class FloatingWindowService : Service() {
 
@@ -39,7 +40,7 @@ class FloatingWindowService : Service() {
 
             val result = intent.getStringExtra("signal") ?: "WAIT"
             signal.text = result
-            score.text = "Score: ${intent.getIntExtra("confidence", 0)}%"
+            score.text = "${intent.getIntExtra("confidence", 0)}%"
             info.text = intent.getStringExtra("message") ?: ""
 
             signal.setTextColor(
@@ -92,8 +93,8 @@ class FloatingWindowService : Service() {
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(3), dp(1), dp(3), dp(1))
-            setBackgroundColor(Color.rgb(18, 18, 18))
+            setPadding(dp(2), 0, dp(2), 0)
+            setBackgroundColor(Color.rgb(12, 12, 12))
         }
 
         val header = LinearLayout(this).apply {
@@ -101,17 +102,17 @@ class FloatingWindowService : Service() {
         }
 
         val title = TextView(this).apply {
-            text = "OTC AI"
-            textSize = 8f
+            text = "OTC"
+            textSize = 6f
             setTextColor(Color.WHITE)
-            setPadding(0, dp(1), dp(2), dp(1))
+            setPadding(0, 0, 0, 0)
         }
 
         val close = TextView(this).apply {
             text = "×"
-            textSize = 13f
+            textSize = 10f
             setTextColor(Color.WHITE)
-            setPadding(dp(3), 0, dp(2), 0)
+            setPadding(dp(2), 0, 0, 0)
             setOnClickListener { hidePanel() }
         }
 
@@ -120,21 +121,25 @@ class FloatingWindowService : Service() {
 
         signal = TextView(this).apply {
             text = "WAIT"
-            textSize = 12f
+            textSize = 9f
             setTextColor(Color.YELLOW)
+            setSingleLine(true)
         }
 
         score = TextView(this).apply {
-            text = "Score: --"
-            textSize = 7f
+            text = "--%"
+            textSize = 6f
             setTextColor(Color.WHITE)
+            setSingleLine(true)
         }
 
         info = TextView(this).apply {
-            text = "Waiting..."
-            textSize = 7f
+            text = "Waiting"
+            textSize = 5f
             setTextColor(Color.LTGRAY)
-            maxLines = 2
+            maxLines = 1
+            setSingleLine(true)
+            ellipsize = android.text.TextUtils.TruncateAt.END
         }
 
         root.addView(header)
@@ -143,7 +148,7 @@ class FloatingWindowService : Service() {
         root.addView(info)
 
         val params = WindowManager.LayoutParams(
-            dp(96),
+            dp(68),
             WindowManager.LayoutParams.WRAP_CONTENT,
             if (Build.VERSION.SDK_INT >= 26)
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
@@ -179,9 +184,7 @@ class FloatingWindowService : Service() {
                         val dx = event.rawX - downX
                         val dy = event.rawY - downY
 
-                        if (kotlin.math.abs(dx) > dp(3) ||
-                            kotlin.math.abs(dy) > dp(3)
-                        ) {
+                        if (abs(dx) > dp(3) || abs(dy) > dp(3)) {
                             moved = true
                         }
 
