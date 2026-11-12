@@ -67,6 +67,7 @@ class FloatingWindowService : Service() {
         flags: Int,
         startId: Int
     ): Int {
+
         if (!Settings.canDrawOverlays(this)) {
             stopSelf()
             return START_NOT_STICKY
@@ -102,7 +103,7 @@ class FloatingWindowService : Service() {
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(2), dp(1), dp(2), dp(1))
+            setPadding(dp(1), 0, dp(1), 0)
             setBackgroundColor(Color.rgb(12, 12, 12))
         }
 
@@ -112,15 +113,15 @@ class FloatingWindowService : Service() {
 
         val title = TextView(this).apply {
             text = "OTC CANDLE AI"
-            textSize = 7f
+            textSize = 6f
             includeFontPadding = false
             setTextColor(Color.WHITE)
-            setPadding(0, 0, dp(3), 0)
+            setPadding(0, 0, dp(2), 0)
         }
 
         val close = TextView(this).apply {
             text = "X"
-            textSize = 8f
+            textSize = 7f
             includeFontPadding = false
             setTextColor(Color.WHITE)
             setPadding(dp(2), 0, 0, 0)
@@ -132,7 +133,7 @@ class FloatingWindowService : Service() {
 
         signal = TextView(this).apply {
             text = "WAIT"
-            textSize = 10f
+            textSize = 9f
             includeFontPadding = false
             setTextColor(Color.YELLOW)
             setSingleLine(true)
@@ -140,7 +141,7 @@ class FloatingWindowService : Service() {
 
         score = TextView(this).apply {
             text = "Score: --%"
-            textSize = 7f
+            textSize = 6f
             includeFontPadding = false
             setTextColor(Color.WHITE)
             setSingleLine(true)
@@ -148,14 +149,13 @@ class FloatingWindowService : Service() {
 
         info = TextView(this).apply {
             text = "Waiting..."
-            textSize = 6f
+            textSize = 5.5f
             includeFontPadding = false
             setTextColor(Color.LTGRAY)
             setSingleLine(false)
             maxLines = Int.MAX_VALUE
             ellipsize = null
-            maxWidth = (resources.displayMetrics.widthPixels - dp(8))
-                .coerceAtLeast(dp(80))
+            maxWidth = dp(160)
         }
 
         root.addView(header)
