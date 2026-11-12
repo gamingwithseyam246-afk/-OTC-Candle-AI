@@ -13,6 +13,7 @@ import android.os.IBinder
 import android.provider.Settings
 import android.view.Gravity
 import android.view.MotionEvent
+import android.view.ScaleGestureDetector
 import android.view.View
 import android.view.WindowManager
 import android.widget.LinearLayout
@@ -32,6 +33,7 @@ class FloatingWindowService : Service() {
     private lateinit var score: TextView
     private lateinit var info: TextView
     private var registered = false
+    private var panelScale = 1f
 
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -100,6 +102,8 @@ class FloatingWindowService : Service() {
 
         val d = resources.displayMetrics.density
         fun dp(v: Int) = (v * d).toInt()
+
+        panelScale = 1f
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -178,7 +182,36 @@ class FloatingWindowService : Service() {
             y = dp(4)
         }
 
-        header.setOnTouchListener(object : View.OnTouchListener {
+        val scaleDetector = ScaleGestureDetector(
+            this,
+            object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+                override fun onScale(detector: ScaleGestureDetector): Boolean {
+
+                    panelScale = (panelScale * detector.scaleFactor)
+                        .coerceIn(0.55f, 1.5f)
+
+                    title.textSize = 5.5f * panelScale
+                    close.textSize = 6f * panelScale
+                    signal.textSize = 8f * panelScale
+                    score.textSize = 5.5f * panelScale
+                    info.textSize = 5f * panelScale
+
+                    info.maxWidth = dp((145 * panelScale).toInt())
+
+                    root.requestLayout()
+
+                    try {
+                        wm.updateViewLayout(root, params)
+                    } catch (_: Exception) {
+                    }
+
+                    return true
+                }
+            }
+        )
+
+        val touchListener = object : View.OnTouchListener {
+
             var downX = 0f
             var downY = 0f
             var startX = 0
@@ -186,7 +219,11 @@ class FloatingWindowService : Service() {
             var moved = false
 
             override fun onTouch(v: View, event: MotionEvent): Boolean {
-                when (event.action) {
+
+                scaleDetector.onTouchEvent(event)
+
+                when (event.actionMasked) {
+
                     MotionEvent.ACTION_DOWN -> {
                         downX = event.rawX
                         downY = event.rawY
@@ -196,40 +233,57 @@ class FloatingWindowService : Service() {
                         return true
                     }
 
+                    MotionEvent.ACTION_POINTER_DOWN -> {
+                        moved = false
+                        return true
+                    }
+
                     MotionEvent.ACTION_MOVE -> {
-                        val dx = event.rawX - downX
-                        val dy = event.rawY - downY
 
-                        if (abs(dx) > dp(3) || abs(dy) > dp(3)) {
-                            moved = true
-                        }
+                        if (event.pointerCount == 1 &&
+                            !scaleDetector.isInProgress
+                        ) {
+                            val dx = event.rawX - downX
+                            val dy = event.rawY - downY
 
-                        if (moved) {
-                            val maxX = (
-                                resources.displayMetrics.widthPixels - root.width
-                            ).coerceAtLeast(0)
+                            if (abs(dx) > dp(3) || abs(dy) > dp(3)) {
+                                moved = true
+                            }
 
-                            val maxY = (
-                                resources.displayMetrics.heightPixels - root.height
-                            ).coerceAtLeast(0)
+                            if (moved) {
+                                val maxX = (
+                                    resources.displayMetrics.widthPixels - root.width
+                                ).coerceAtLeast(0)
 
-                            params.x = (startX + dx.toInt()).coerceIn(0, maxX)
-                            params.y = (startY + dy.toInt()).coerceIn(0, maxY)
+                                val maxY = (
+                                    resources.displayMetrics.heightPixels - root.height
+                                ).coerceAtLeast(0)
 
-                            try {
-                                wm.updateViewLayout(root, params)
-                            } catch (_: Exception) {
+                                params.x = (startX + dx.toInt()).coerceIn(0, maxX)
+                                params.y = (startY + dy.toInt()).coerceIn(0, maxY)
+
+                                try {
+                                    wm.updateViewLayout(root, params)
+                                } catch (_: Exception) {
+                                }
                             }
                         }
+
                         return true
                     }
 
                     MotionEvent.ACTION_UP,
-                    MotionEvent.ACTION_CANCEL -> return true
+                    MotionEvent.ACTION_CANCEL -> {
+                        return true
+                    }
                 }
+
                 return true
             }
-        })
+        }
+
+        root.setOnTouchListener(touchListener)
+        header.setOnTouchListener(touchListener)
 
         try {
             wm.addView(root, params)
