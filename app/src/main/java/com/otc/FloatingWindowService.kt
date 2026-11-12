@@ -16,6 +16,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import kotlin.math.abs
 
@@ -42,10 +43,7 @@ class FloatingWindowService : Service() {
         override fun onReceive(context: Context?, intent: Intent?) {
 
             if (intent?.action != "com.otc.candleai.ANALYSIS_UPDATE") return
-
-            // Timer update হলে পুরোনো Analysis পরিবর্তন করবে না।
             if (!intent.hasExtra("signal")) return
-
             if (floatingView == null) return
 
             val signal = intent.getStringExtra("signal") ?: "WAIT"
@@ -77,7 +75,8 @@ class FloatingWindowService : Service() {
             return START_NOT_STICKY
         }
 
-        windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+        windowManager =
+            getSystemService(WINDOW_SERVICE) as WindowManager
 
         registerAnalysisReceiver()
 
@@ -162,19 +161,40 @@ class FloatingWindowService : Service() {
             text = "Score: --"
             textSize = 14f
             setTextColor(Color.WHITE)
+            setPadding(0, 0, 0, 8)
         }
 
         infoView = TextView(this).apply {
             text = "Waiting for analysis"
             textSize = 12f
             setTextColor(Color.WHITE)
-            maxLines = 5
+            maxLines = 30
+            setPadding(0, 4, 4, 8)
+        }
+
+        val scrollView = ScrollView(this).apply {
+            isFillViewport = false
+            overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
+            addView(
+                infoView,
+                ScrollView.LayoutParams(
+                    ScrollView.LayoutParams.MATCH_PARENT,
+                    ScrollView.LayoutParams.WRAP_CONTENT
+                )
+            )
         }
 
         panel.addView(header)
         panel.addView(signalView)
         panel.addView(confidenceView)
-        panel.addView(infoView)
+
+        panel.addView(
+            scrollView,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                260
+            )
+        )
 
         val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
 
@@ -194,14 +214,20 @@ class FloatingWindowService : Service() {
         }
 
         title.setOnTouchListener(object : View.OnTouchListener {
+
             private var startX = 0
             private var startY = 0
             private var touchX = 0f
             private var touchY = 0f
             private var dragging = false
 
-            override fun onTouch(view: View, event: MotionEvent): Boolean {
+            override fun onTouch(
+                view: View,
+                event: MotionEvent
+            ): Boolean {
+
                 when (event.action) {
+
                     MotionEvent.ACTION_DOWN -> {
                         startX = params.x
                         startY = params.y
@@ -223,7 +249,10 @@ class FloatingWindowService : Service() {
                         params.y = (startY + dy).coerceAtLeast(0)
 
                         try {
-                            windowManager.updateViewLayout(panel, params)
+                            windowManager.updateViewLayout(
+                                panel,
+                                params
+                            )
                         } catch (e: Exception) {
                             android.util.Log.e(
                                 "FloatingWindowService",
@@ -231,6 +260,7 @@ class FloatingWindowService : Service() {
                                 e
                             )
                         }
+
                         return true
                     }
 
@@ -239,6 +269,7 @@ class FloatingWindowService : Service() {
                         return true
                     }
                 }
+
                 return true
             }
         })
@@ -256,7 +287,9 @@ class FloatingWindowService : Service() {
         }
     }
 
-    private fun savePosition(params: WindowManager.LayoutParams) {
+    private fun savePosition(
+        params: WindowManager.LayoutParams
+    ) {
         getSharedPreferences(PREFS, MODE_PRIVATE)
             .edit()
             .putInt(KEY_X, params.x)
@@ -276,6 +309,7 @@ class FloatingWindowService : Service() {
                 )
             }
         }
+
         floatingView = null
     }
 
@@ -285,6 +319,7 @@ class FloatingWindowService : Service() {
                 unregisterReceiver(analysisReceiver)
             } catch (_: Exception) {
             }
+
             receiverRegistered = false
         }
 
