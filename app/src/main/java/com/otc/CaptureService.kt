@@ -1,3 +1,4 @@
+
 package com.otc.candleai
 
 import android.app.Notification
@@ -189,6 +190,7 @@ class CaptureService : Service() {
         pendingCompletedAnalysis.set(false)
     }
 
+    // প্রতি ৩ সেকেন্ডে Analysis চালানোর ব্যবস্থা
     private fun processLatestImage(reader: ImageReader) {
 
         var image: Image? = null
@@ -229,12 +231,26 @@ class CaptureService : Service() {
             image.close()
             image = null
 
-            val completed = pendingCompletedAnalysis.getAndSet(false)
+            val completed =
+                pendingCompletedAnalysis.getAndSet(false)
 
             if (completed) {
                 pendingAnalysis.set(false)
+                lastAnalysisTime = System.currentTimeMillis()
                 runAnalysis(bitmap, false, true)
-            } else if (pendingAnalysis.getAndSet(false)) {
+                return
+            }
+
+            val requested =
+                pendingAnalysis.getAndSet(false)
+
+            val now = System.currentTimeMillis()
+
+            if (
+                requested ||
+                now - lastAnalysisTime >= analysisIntervalMs
+            ) {
+                lastAnalysisTime = now
                 runAnalysis(bitmap, true, false)
             } else {
                 runOcr(bitmap)
@@ -242,6 +258,7 @@ class CaptureService : Service() {
 
         } catch (e: Exception) {
             image?.close()
+            e.printStackTrace()
         }
     }
 
@@ -350,14 +367,12 @@ class CaptureService : Service() {
 
         if (previous == null) {
 
-            // প্রথম টাইমার পাওয়া মাত্রই বিশ্লেষণ শুরু
             pendingAnalysis.set(true)
 
         } else {
 
             val difference = remaining - previous
 
-            // স্বাভাবিক টাইমার চলার দিক নির্ণয়
             if (abs(difference) in 1..15) {
 
                 if (difference < 0) {
@@ -367,12 +382,10 @@ class CaptureService : Service() {
                 }
             }
 
-            // কাউন্টডাউন: 00:01 থেকে 01:00
             val countdownReset =
                 timerDirection <= 0 &&
                 difference > 15
 
-            // কাউন্টআপ: 00:59 থেকে 00:00
             val countupReset =
                 timerDirection >= 0 &&
                 difference < -15
@@ -385,9 +398,9 @@ class CaptureService : Service() {
                 pendingAnalysis.set(false)
 
                 lastAnalysisTime = now
+
             } else {
 
-                // প্রতি প্রায় ৩ সেকেন্ডে লাইভ পর্যবেক্ষণ
                 if (
                     remaining != lastTimerValue &&
                     now - lastAnalysisTime >= analysisIntervalMs
@@ -401,8 +414,6 @@ class CaptureService : Service() {
         previousSecondsRemaining = remaining
         lastTimerValue = remaining
 
-        // টাইমার আপডেট আলাদা পাঠানো হয়।
-        // এতে আগের সিগন্যাল মুছে যাবে না।
         val timerIntent = Intent(ACTION_UPDATE).apply {
             setPackage(packageName)
 
