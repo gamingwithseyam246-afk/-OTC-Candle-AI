@@ -42,6 +42,31 @@ class CaptureService : Service() {
     @Volatile
     private var previousSecondsRemaining: Int? = null
 
+    @Volatile
+    private var lastAnalysisQueuedAt = 0L
+
+    companion object {
+        private const val ANALYSIS_INTERVAL_MS = 60_000L
+        private const val MIN_ANALYSIS_GAP_MS = 45_000L
+    }
+
+    private fun queueAnalysis(reason: String) {
+        val now = SystemClock.elapsedRealtime()
+        val previous = lastAnalysisQueuedAt
+
+        if (previous == 0L ||
+            now - previous >= MIN_ANALYSIS_GAP_MS
+        ) {
+            lastAnalysisQueuedAt = now
+            pendingAnalysis.set(true)
+
+            Log.d(
+                "OTCCandleAI",
+                "Analysis queued: $reason"
+            )
+        }
+    }
+
     override fun onStartCommand(
         intent: Intent?,
         flags: Int,
@@ -180,6 +205,15 @@ class CaptureService : Service() {
 
             val now = SystemClock.elapsedRealtime()
 
+            // OCR-independent fallback: attempt analysis every 60 seconds.
+            if (
+                lastAnalysisQueuedAt == 0L ||
+                now - lastAnalysisQueuedAt >= ANALYSIS_INTERVAL_MS
+            ) {
+                queueAnalysis("60-second fallback")
+            }
+
+            // Read the chart timer approximately once per second.
             if (
                 now - lastOcrTime >= 1000 &&
                 ocrRunning.compareAndSet(false, true)
@@ -189,8 +223,6 @@ class CaptureService : Service() {
             }
 
             if (pendingAnalysis.compareAndSet(true, false)) {
-
-                // Corrected: CandleAnalyzer accepts only one argument.
                 val result = CandleAnalyzer.analyze(bitmap)
 
                 val update = Intent(
@@ -207,7 +239,7 @@ class CaptureService : Service() {
 
                 Log.d(
                     "OTCCandleAI",
-                    "New analysis: ${result.signal}, confidence: ${result.confidence}"
+                    "Analysis: ${result.signal}, confidence: ${result.confidence}"
                 )
             }
 
@@ -292,20 +324,11 @@ class CaptureService : Service() {
                     if (remaining != null && detectedTimer != null) {
                         val previous = previousSecondsRemaining
 
-                        if (previous == null) {
-                            pendingAnalysis.set(true)
-
-                            Log.d(
-                                "OTCCandleAI",
-                                "Initial analysis queued"
-                            )
-                        } else if (remaining > previous + 15) {
-                            pendingAnalysis.set(true)
-
-                            Log.d(
-                                "OTCCandleAI",
-                                "New candle minute detected: $detectedTimer"
-                            )
+                        if (
+                            previous == null ||
+                            remaining > previous + 15
+                        ) {
+                            queueAnalysis("chart timer rollover")
                         }
 
                         previousSecondsRemaining = remaining
@@ -328,7 +351,7 @@ class CaptureService : Service() {
                     } else {
                         Log.d(
                             "OTCCandleAI",
-                            "Chart timer not found"
+                            "Chart timer not found; fallback remains active"
                         )
                     }
                 }
