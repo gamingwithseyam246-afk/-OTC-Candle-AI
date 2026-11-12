@@ -61,7 +61,7 @@ object CandleAnalyzer {
 
         val detectedBars = detectCandles(bitmap)
 
-        // The newest detected candle is treated as the live candle.
+        // Exclude the newest candle because it may still be forming.
         val bars = if (detectedBars.size >= 3) {
             detectedBars.dropLast(1)
         } else {
@@ -73,8 +73,11 @@ object CandleAnalyzer {
 
         if (bars.size < 8) {
             return CandleSignal(
-                "WAIT", 0, green, red,
-                "Waiting for more complete candles | Detected: ${detectedBars.size}"
+                "WAIT",
+                0,
+                green,
+                red,
+                "WAIT | COMPLETE: ${bars.size} | DETECTED: ${detectedBars.size}"
             )
         }
 
@@ -113,7 +116,6 @@ object CandleAnalyzer {
         val lastSwingHigh = highs.lastOrNull()
         val lastSwingLow = lows.lastOrNull()
 
-        // Corrected BOS crossing conditions.
         val bullishBOS = lastSwingHigh != null &&
             lastSwingHigh.index < bars.lastIndex - 1 &&
             previous.closeY > lastSwingHigh.levelY &&
@@ -198,18 +200,15 @@ object CandleAnalyzer {
             "Bearish Engulfing" -> score -= 4
         }
 
-        // Recent candle momentum with increasing weights.
         bars.takeLast(6).forEachIndexed { index, bar ->
             val weight = index + 1
             score += if (bar.bullish) weight else -weight
         }
 
-        // Strong body confirms directional momentum.
         if (last.body > averageRange * 0.55f) {
             score += if (last.bullish) 2 else -2
         }
 
-        // Opposite wick warns against weak continuation.
         if (last.upperWick > last.body * 2) score -= 2
         if (last.lowerWick > last.body * 2) score += 2
 
@@ -302,13 +301,7 @@ object CandleAnalyzer {
             append(" | TOTAL: ${bars.size}")
         }
 
-        return CandleSignal(
-            signal,
-            confidence,
-            green,
-            red,
-            message
-        )
+        return CandleSignal(signal, confidence, green, red, message)
     }
 
     private fun detectPattern(
@@ -382,6 +375,7 @@ object CandleAnalyzer {
         return result
     }
 
+    // Detect candle bodies first, instead of joining all colored pixels.
     private fun detectCandles(bitmap: Bitmap): List<Bar> {
         val w = bitmap.width
         val h = bitmap.height
@@ -399,78 +393,130 @@ object CandleAnalyzer {
         if (width <= 0 || height <= 0) return emptyList()
 
         val types = IntArray(width)
-        val tops = IntArray(width) { height }
-        val bottoms = IntArray(width) { -1 }
+        val counts = IntArray(width)
+        val longestRuns = IntArray(width)
 
+        // Find the dominant candle color and longest vertical colored run
+        // in every screen column.
         for (x in 0 until width) {
-            var green = 0
-            var red = 0
-            var greenTop = height
-            var greenBottom = -1
-            var redTop = height
-            var redBottom = -1
+            var greenCount = 0
+            var redCount = 0
+            var greenRun = 0
+            var redRun = 0
+            var maxGreenRun = 0
+            var maxRedRun = 0
 
             for (y in 0 until height) {
                 when (colorType(bitmap.getPixel(left + x, top + y))) {
                     1 -> {
-                        green++
-                        greenTop = minOf(greenTop, y)
-                        greenBottom = maxOf(greenBottom, y)
+                        greenCount++
+                        greenRun++
+                        redRun = 0
+                        maxGreenRun = maxOf(maxGreenRun, greenRun)
                     }
                     2 -> {
-                        red++
-                        redTop = minOf(redTop, y)
-                        redBottom = maxOf(redBottom, y)
+                        redCount++
+                        redRun++
+                        greenRun = 0
+                        maxRedRun = maxOf(maxRedRun, redRun)
+                    }
+                    else -> {
+                        greenRun = 0
+                        redRun = 0
                     }
                 }
             }
 
-            val greenSpan = greenBottom - greenTop + 1
-            val redSpan = redBottom - redTop + 1
-
             when {
-                green >= 2 && greenSpan >= 6 && green > red -> {
+                greenCount > redCount &&
+                    greenCount >= 3 &&
+                    maxGreenRun >= 2 -> {
                     types[x] = 1
-                    tops[x] = greenTop
-                    bottoms[x] = greenBottom
+                    counts[x] = greenCount
+                    longestRuns[x] = maxGreenRun
                 }
-                red >= 2 && redSpan >= 6 && red > green -> {
+
+                redCount > greenCount &&
+                    redCount >= 3 &&
+                    maxRedRun >= 2 -> {
                     types[x] = 2
-                    tops[x] = redTop
-                    bottoms[x] = redBottom
+                    counts[x] = redCount
+                    longestRuns[x] = maxRedRun
                 }
             }
+        }
+
+        // A candle body is a group of neighboring columns with a
+        // substantial vertical colored run. Thin wick-only columns
+        // are not used to join separate candles.
+        val bodyColumns = BooleanArray(width) { x ->
+            types[x] != 0 &&
+                counts[x] >= 3 &&
+                longestRuns[x] >= 2
         }
 
         val result = mutableListOf<Bar>()
         var x = 0
 
         while (x < width) {
-            val type = types[x]
-
-            if (type == 0) {
+            if (!bodyColumns[x]) {
                 x++
                 continue
             }
 
+            val type = types[x]
             val start = x
             var end = x
 
-            while (x + 1 < width && types[x + 1] == type) {
-                x++
-                end = x
+            while (
+                end + 1 < width &&
+                bodyColumns[end + 1] &&
+                types[end + 1] == type
+            ) {
+                end++
             }
 
-            val candleWidth = end - start + 1
+            // Split unusually wide merged groups at their weakest
+            // body column, instead of discarding the entire group.
+            val segments = mutableListOf<Pair<Int, Int>>()
+            var segmentStart = start
 
-            if (candleWidth in 1..18) {
+            while (end - segmentStart + 1 > 18) {
+                val searchStart = segmentStart + 5
+                val searchEnd = minOf(segmentStart + 14, end - 4)
+
+                if (searchStart > searchEnd) break
+
+                var splitAt = searchStart
+                var weakest = Int.MAX_VALUE
+
+                for (candidate in searchStart..searchEnd) {
+                    val strength = counts[candidate]
+
+                    if (strength < weakest) {
+                        weakest = strength
+                        splitAt = candidate
+                    }
+                }
+
+                segments.add(segmentStart to (splitAt - 1))
+                segmentStart = splitAt
+            }
+
+            segments.add(segmentStart to end)
+
+            for ((partStart, partEnd) in segments) {
+                val candleWidth = partEnd - partStart + 1
+
+                if (candleWidth !in 1..18) continue
+
                 val rows = IntArray(height)
                 var minY = height
                 var maxY = -1
 
-                for (cx in start..end) {
-                    for (cy in tops[cx]..bottoms[cx]) {
-                        if (cy in 0 until height &&
+                for (cx in partStart..partEnd) {
+                    for (cy in 0 until height) {
+                        if (
                             colorType(
                                 bitmap.getPixel(left + cx, top + cy)
                             ) == type
@@ -482,46 +528,55 @@ object CandleAnalyzer {
                     }
                 }
 
-                if (maxY >= minY) {
-                    val peak = rows.maxOrNull() ?: 0
-                    val peakY = rows.indices.maxByOrNull { rows[it] } ?: minY
-                    val threshold = maxOf(1, ceil(peak * 0.60).toInt())
+                if (maxY < minY) continue
 
-                    var bodyTop = peakY
-                    var bodyBottom = peakY
+                val peak = rows.maxOrNull() ?: 0
+                val peakY = rows.indices.maxByOrNull { rows[it] } ?: minY
+                val threshold = maxOf(1, ceil(peak * 0.60).toInt())
 
-                    while (bodyTop > minY &&
-                        rows[bodyTop - 1] >= threshold
-                    ) bodyTop--
+                var bodyTop = peakY
+                var bodyBottom = peakY
 
-                    while (bodyBottom < maxY &&
-                        rows[bodyBottom + 1] >= threshold
-                    ) bodyBottom++
-
-                    val body = bodyBottom - bodyTop + 1
-                    val totalHeight = maxY - minY + 1
-
-                    if (totalHeight >= 6 && body >= 1) {
-                        result.add(
-                            Bar(
-                                bullish = type == 1,
-                                body = body,
-                                upperWick = bodyTop - minY,
-                                lowerWick = maxY - bodyBottom,
-                                centerX = left + (start + end) / 2,
-                                closeY = if (type == 1) bodyTop + top
-                                         else bodyBottom + top,
-                                topY = minY + top,
-                                bottomY = maxY + top,
-                                bodyTop = bodyTop + top,
-                                bodyBottom = bodyBottom + top
-                            )
-                        )
-                    }
+                while (
+                    bodyTop > minY &&
+                    rows[bodyTop - 1] >= threshold
+                ) {
+                    bodyTop--
                 }
+
+                while (
+                    bodyBottom < maxY &&
+                    rows[bodyBottom + 1] >= threshold
+                ) {
+                    bodyBottom++
+                }
+
+                val bodySize = bodyBottom - bodyTop + 1
+                val totalHeight = maxY - minY + 1
+
+                if (totalHeight < 5 || bodySize < 1) continue
+
+                result.add(
+                    Bar(
+                        bullish = type == 1,
+                        body = bodySize,
+                        upperWick = bodyTop - minY,
+                        lowerWick = maxY - bodyBottom,
+                        centerX = left + (partStart + partEnd) / 2,
+                        closeY = if (type == 1) {
+                            bodyTop + top
+                        } else {
+                            bodyBottom + top
+                        },
+                        topY = minY + top,
+                        bottomY = maxY + top,
+                        bodyTop = bodyTop + top,
+                        bodyBottom = bodyBottom + top
+                    )
+                )
             }
 
-            x++
+            x = end + 1
         }
 
         return result.sortedBy { it.centerX }
