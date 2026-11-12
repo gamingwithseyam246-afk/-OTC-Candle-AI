@@ -113,9 +113,16 @@ class FloatingWindowService : Service() {
     private fun showPanel() {
         if (floatingView != null) return
 
+        val density = resources.displayMetrics.density
+
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(22, 16, 22, 16)
+            setPadding(
+                (10 * density).toInt(),
+                (6 * density).toInt(),
+                (10 * density).toInt(),
+                (6 * density).toInt()
+            )
             setBackgroundColor(Color.rgb(25, 25, 25))
         }
 
@@ -126,16 +133,16 @@ class FloatingWindowService : Service() {
 
         val title = TextView(this).apply {
             text = "OTC CANDLE AI"
-            textSize = 16f
+            textSize = 12f
             setTextColor(Color.WHITE)
-            setPadding(0, 8, 20, 8)
+            setPadding(0, 3, 8, 3)
         }
 
         val hideButton = TextView(this).apply {
-            text = "  ×  "
-            textSize = 22f
+            text = " × "
+            textSize = 18f
             setTextColor(Color.WHITE)
-            setPadding(8, 4, 8, 4)
+            setPadding(5, 2, 5, 2)
             setOnClickListener {
                 hidePanel()
             }
@@ -154,32 +161,29 @@ class FloatingWindowService : Service() {
 
         signalView = TextView(this).apply {
             text = "WAIT"
-            textSize = 26f
+            textSize = 19f
             setTextColor(Color.YELLOW)
-            setPadding(0, 12, 0, 8)
+            setPadding(0, 4, 0, 2)
         }
 
         confidenceView = TextView(this).apply {
             text = "Score: --"
-            textSize = 14f
+            textSize = 11f
             setTextColor(Color.WHITE)
-            setPadding(0, 0, 0, 8)
+            setPadding(0, 0, 0, 3)
         }
 
         infoView = TextView(this).apply {
             text = "Waiting for analysis"
-            textSize = 12f
+            textSize = 10f
             setTextColor(Color.WHITE)
             maxLines = 100
-            setPadding(0, 4, 4, 8)
+            setPadding(0, 2, 2, 4)
         }
 
         val scrollView = ScrollView(this).apply {
             isFillViewport = false
             overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
-
-            // ScrollView-এর child সরাসরি যোগ করা হচ্ছে।
-            // এতে আগের LayoutParams compilation error হবে না।
             addView(infoView)
         }
 
@@ -187,7 +191,7 @@ class FloatingWindowService : Service() {
         panel.addView(signalView)
         panel.addView(confidenceView)
 
-        val scrollHeight = (260 * resources.displayMetrics.density).toInt()
+        val scrollHeight = (110 * density).toInt()
 
         panel.addView(
             scrollView,
@@ -200,7 +204,7 @@ class FloatingWindowService : Service() {
         val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
 
         val params = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
+            (210 * density).toInt(),
             WindowManager.LayoutParams.WRAP_CONTENT,
             if (Build.VERSION.SDK_INT >= 26) {
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
@@ -215,7 +219,7 @@ class FloatingWindowService : Service() {
             y = prefs.getInt(KEY_Y, 200)
         }
 
-        // শুধু Header ধরে প্যানেল সরানো যাবে।
+        // Header ধরে প্যানেল সরানো যাবে
         title.setOnTouchListener(object : View.OnTouchListener {
 
             private var startX = 0
