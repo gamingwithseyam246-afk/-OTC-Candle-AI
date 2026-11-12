@@ -11,6 +11,7 @@ import android.graphics.PixelFormat
 import android.os.Build
 import android.os.IBinder
 import android.provider.Settings
+import android.text.TextUtils
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -39,8 +40,9 @@ class FloatingWindowService : Service() {
             if (!intent.hasExtra("signal") || panel == null) return
 
             val result = intent.getStringExtra("signal") ?: "WAIT"
+
             signal.text = result
-            score.text = "${intent.getIntExtra("confidence", 0)}%"
+            score.text = "Score: ${intent.getIntExtra("confidence", 0)}%"
             info.text = intent.getStringExtra("message") ?: ""
 
             signal.setTextColor(
@@ -50,6 +52,14 @@ class FloatingWindowService : Service() {
                     else -> Color.YELLOW
                 }
             )
+
+            panel?.let {
+                it.requestLayout()
+                try {
+                    wm.updateViewLayout(it, it.layoutParams)
+                } catch (_: Exception) {
+                }
+            }
         }
     }
 
@@ -102,17 +112,19 @@ class FloatingWindowService : Service() {
         }
 
         val title = TextView(this).apply {
-            text = "OTC"
-            textSize = 6f
+            text = "OTC CANDLE AI"
+            textSize = 7f
+            includeFontPadding = false
             setTextColor(Color.WHITE)
-            setPadding(0, 0, 0, 0)
+            setPadding(0, 0, dp(3), 0)
         }
 
         val close = TextView(this).apply {
-            text = "×"
-            textSize = 10f
+            text = "X"
+            textSize = 8f
+            includeFontPadding = false
             setTextColor(Color.WHITE)
-            setPadding(dp(2), 0, 0, 0)
+            setPadding(dp(2), 0, dp(1), 0)
             setOnClickListener { hidePanel() }
         }
 
@@ -121,25 +133,31 @@ class FloatingWindowService : Service() {
 
         signal = TextView(this).apply {
             text = "WAIT"
-            textSize = 9f
+            textSize = 10f
+            includeFontPadding = false
             setTextColor(Color.YELLOW)
             setSingleLine(true)
         }
 
         score = TextView(this).apply {
-            text = "--%"
-            textSize = 6f
+            text = "Score: --%"
+            textSize = 7f
+            includeFontPadding = false
             setTextColor(Color.WHITE)
             setSingleLine(true)
         }
 
         info = TextView(this).apply {
-            text = "Waiting"
-            textSize = 5f
+            text = "Waiting..."
+            textSize = 6f
+            includeFontPadding = false
             setTextColor(Color.LTGRAY)
-            maxLines = 1
-            setSingleLine(true)
-            ellipsize = android.text.TextUtils.TruncateAt.END
+            maxLines = Int.MAX_VALUE
+            ellipsize = null
+            setSingleLine(false)
+            maxWidth = (
+                resources.displayMetrics.widthPixels - dp(8)
+            ).coerceAtLeast(dp(80))
         }
 
         root.addView(header)
@@ -148,7 +166,7 @@ class FloatingWindowService : Service() {
         root.addView(info)
 
         val params = WindowManager.LayoutParams(
-            dp(68),
+            WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
             if (Build.VERSION.SDK_INT >= 26)
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
@@ -162,7 +180,7 @@ class FloatingWindowService : Service() {
             y = dp(4)
         }
 
-        header.setOnTouchListener(object : View.OnTouchListener {
+        title.setOnTouchListener(object : View.OnTouchListener {
             var downX = 0f
             var downY = 0f
             var startX = 0
