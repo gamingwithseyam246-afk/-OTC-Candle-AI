@@ -116,8 +116,7 @@ object CandleAnalyzer {
             append("\n")
             append("Resistance: ${if (analysis.resistance) "কাছাকাছি" else "নিশ্চিত নয়"}")
             append("\n")
-            append("BOS: ${analysis.bos}")
-            append(" | CHOCH: ${analysis.choch}")
+            append("BOS: ${analysis.bos} | CHOCH: ${analysis.choch}")
             append("\n")
             append("Liquidity Sweep: ${analysis.sweep}")
             append("\n")
@@ -151,13 +150,10 @@ object CandleAnalyzer {
         val first = bars.first()
         val last = bars.last()
 
-        // 1. Overall trend
-        val firstClose = first.closeY
-        val lastClose = last.closeY
-
+        // Overall trend
         val trend = when {
-            lastClose < firstClose -> "UPTREND"
-            lastClose > firstClose -> "DOWNTREND"
+            last.closeY < first.closeY -> "UPTREND"
+            last.closeY > first.closeY -> "DOWNTREND"
             else -> "SIDEWAYS"
         }
 
@@ -166,9 +162,8 @@ object CandleAnalyzer {
             "DOWNTREND" -> score -= 12.0
         }
 
-        // 2. Candle momentum
+        // Candle momentum
         val momentumScore = (green - red) * 4.0
-
         score += momentumScore
 
         val momentum = when {
@@ -179,7 +174,7 @@ object CandleAnalyzer {
             else -> "NEUTRAL"
         }
 
-        // 3. Body strength
+        // Body strength
         val averageBody = recent.map {
             it.body.toDouble()
         }.average()
@@ -196,20 +191,14 @@ object CandleAnalyzer {
             }
         }
 
-        // 4. Support and resistance
-        val supportLevel = bars
-            .dropLast(1)
-            .minOf { it.bottomY }
+        // Support and resistance
+        val previousBars = bars.dropLast(1)
 
-        val resistanceLevel = bars
-            .dropLast(1)
-            .maxOf { it.topY }
+        val supportLevel = previousBars.minOf { it.bottomY }
+        val resistanceLevel = previousBars.maxOf { it.topY }
 
-        val distanceToSupport =
-            abs(last.bottomY - supportLevel)
-
-        val distanceToResistance =
-            abs(last.topY - resistanceLevel)
+        val distanceToSupport = abs(last.bottomY - supportLevel)
+        val distanceToResistance = abs(last.topY - resistanceLevel)
 
         val support = distanceToSupport <= last.range * 2
         val resistance = distanceToResistance <= last.range * 2
@@ -222,11 +211,10 @@ object CandleAnalyzer {
             score -= 7.0
         }
 
-        // 5. BOS - Break of Structure
-        val previousBars = bars.dropLast(1).takeLast(5)
-
-        val previousHigh = previousBars.minOf { it.topY }
-        val previousLow = previousBars.maxOf { it.bottomY }
+        // BOS
+        val previous = previousBars.takeLast(5)
+        val previousHigh = previous.minOf { it.topY }
+        val previousLow = previous.maxOf { it.bottomY }
 
         val bos = when {
             last.closeY < previousHigh -> {
@@ -242,10 +230,10 @@ object CandleAnalyzer {
             else -> "NONE"
         }
 
-        // 6. CHOCH - possible trend change
+        // CHOCH
         val older = bars.dropLast(3).takeLast(5)
-        val choch = if (older.isNotEmpty()) {
 
+        val choch = if (older.isNotEmpty()) {
             val oldTrendUp =
                 older.last().closeY < older.first().closeY
 
@@ -253,7 +241,7 @@ object CandleAnalyzer {
                 older.last().closeY > older.first().closeY
 
             when {
-                oldTrendUp && last.bullish.not() &&
+                oldTrendUp && !last.bullish &&
                     last.closeY > older.maxOf { it.bottomY } -> {
                     score -= 7.0
                     "BEARISH CHANGE"
@@ -271,7 +259,7 @@ object CandleAnalyzer {
             "INSUFFICIENT DATA"
         }
 
-        // 7. Liquidity sweep
+        // Liquidity sweep
         val sweep = when {
             last.topY < previousHigh &&
                 last.closeY > previousHigh -> {
@@ -288,7 +276,7 @@ object CandleAnalyzer {
             else -> "NONE"
         }
 
-        // 8. Wick rejection
+        // Wick rejection
         val rejection = when {
             last.lowerWick > last.body * 1.5 &&
                 last.lowerWick > last.upperWick -> {
@@ -305,20 +293,20 @@ object CandleAnalyzer {
             else -> "NONE"
         }
 
-        // 9. Candle patterns
-        val previous = bars[bars.lastIndex - 1]
+        // Candle patterns
+        val previousCandle = bars[bars.lastIndex - 1]
 
         val pattern = when {
-            previous.bullish.not() &&
+            !previousCandle.bullish &&
                 last.bullish &&
-                last.body > previous.body * 1.2 -> {
+                last.body > previousCandle.body * 1.2 -> {
                 score += 10.0
                 "BULLISH ENGULFING-LIKE"
             }
 
-            previous.bullish &&
+            previousCandle.bullish &&
                 !last.bullish &&
-                last.body > previous.body * 1.2 -> {
+                last.body > previousCandle.body * 1.2 -> {
                 score -= 10.0
                 "BEARISH ENGULFING-LIKE"
             }
@@ -338,7 +326,6 @@ object CandleAnalyzer {
             else -> "NONE"
         }
 
-        // 10. Conflicting market evidence reduces strength
         if (
             (trend == "UPTREND" && red >= 4) ||
             (trend == "DOWNTREND" && green >= 4)
@@ -346,7 +333,6 @@ object CandleAnalyzer {
             score *= 0.75
         }
 
-        // Avoid exaggerated scores from overlapping signals
         score = score.coerceIn(-100.0, 100.0)
 
         return Analysis(
@@ -388,19 +374,21 @@ object CandleAnalyzer {
         val width = bitmap.width
         val height = bitmap.height
 
-        if (width < 100 || height < 100) {
-            return emptyList()
-        }
+        if (width < 100 || height < 100) return emptyList()
 
+        // Chart crop: excludes most controls below the chart.
         val startX = (width * 0.00f).toInt()
         val endX = (width * 0.57f).toInt()
         val startY = (height * 0.12f).toInt()
         val endY = (height * 0.69f).toInt()
 
+        if (endX <= startX || endY <= startY) return emptyList()
+
+        val scanHeight = endY - startY
         val columnTypes = IntArray(endX - startX)
 
+        // First pass: identify dominant red/green columns.
         for (x in startX until endX) {
-
             var greenPixels = 0
             var redPixels = 0
 
@@ -412,8 +400,12 @@ object CandleAnalyzer {
             }
 
             columnTypes[x - startX] = when {
-                greenPixels > redPixels && greenPixels >= 2 -> 1
-                redPixels > greenPixels && redPixels >= 2 -> -1
+                greenPixels >= 3 &&
+                    greenPixels >= redPixels * 1.5f -> 1
+
+                redPixels >= 3 &&
+                    redPixels >= greenPixels * 1.5f -> -1
+
                 else -> 0
             }
         }
@@ -422,7 +414,6 @@ object CandleAnalyzer {
         var x = 0
 
         while (x < columnTypes.size) {
-
             val type = columnTypes[x]
 
             if (type == 0) {
@@ -442,20 +433,17 @@ object CandleAnalyzer {
 
             val candleWidth = candleEnd - candleStart + 1
 
-            if (candleWidth in 2..25) {
+            // Reject unusually wide colored blocks such as UI buttons.
+            if (candleWidth in 2..14) {
 
-                val rowCounts = IntArray(endY - startY)
+                val rowCounts = IntArray(scanHeight)
 
                 for (cx in candleStart..candleEnd) {
-
                     val actualX = startX + cx
 
                     for (cy in startY until endY) {
-
                         if (
-                            colorType(
-                                bitmap.getPixel(actualX, cy)
-                            ) == type
+                            colorType(bitmap.getPixel(actualX, cy)) == type
                         ) {
                             rowCounts[cy - startY]++
                         }
@@ -469,11 +457,10 @@ object CandleAnalyzer {
 
                 val bodyThreshold = max(
                     2,
-                    (candleWidth * 0.45f).toInt()
+                    (candleWidth * 0.65f).toInt()
                 )
 
                 for (i in rowCounts.indices) {
-
                     val count = rowCounts[i]
                     val actualY = startY + i
 
@@ -488,16 +475,27 @@ object CandleAnalyzer {
                     }
                 }
 
-                if (
+                val totalHeight = bottom - top + 1
+                val bodyHeight = bodyBottom - bodyTop + 1
+
+                val bodyFill = if (bodyHeight > 0) {
+                    rowCounts.count {
+                        it >= bodyThreshold
+                    }.toFloat() / bodyHeight
+                } else {
+                    0f
+                }
+
+                val plausibleShape =
                     bottom > top &&
                     bodyBottom >= bodyTop &&
-                    bodyTop < endY
-                ) {
+                    bodyHeight >= 2 &&
+                    totalHeight >= 4 &&
+                    totalHeight <= scanHeight * 0.45f &&
+                    bodyFill >= 0.65f
 
-                    val body = max(
-                        1,
-                        bodyBottom - bodyTop + 1
-                    )
+                if (plausibleShape) {
+                    val body = max(1, bodyHeight)
 
                     val upperWick = max(
                         0,
