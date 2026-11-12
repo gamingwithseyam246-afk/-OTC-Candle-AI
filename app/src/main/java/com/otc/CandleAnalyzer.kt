@@ -44,18 +44,14 @@ object CandleAnalyzer {
         val hsv = FloatArray(3)
         Color.colorToHSV(color, hsv)
 
-        val hue = hsv[0]
-        val saturation = hsv[1]
-        val value = hsv[2]
-
-        if (saturation < 0.35f || value < 0.20f) return 0
+        if (hsv[1] < 0.35f || hsv[2] < 0.20f) return 0
 
         return when {
-            hue in 85f..175f &&
+            hsv[0] in 85f..175f &&
                 g > r * 1.15 &&
                 g > b * 1.05 -> 1
 
-            (hue <= 18f || hue >= 340f) &&
+            (hsv[0] <= 18f || hsv[0] >= 340f) &&
                 r > g * 1.25 &&
                 r > b * 1.15 -> 2
 
@@ -68,14 +64,12 @@ object CandleAnalyzer {
             bitmap.width < 100 ||
             bitmap.height < 100
         ) {
-            return CandleSignal(
-                "WAIT", 0, 0, 0,
-                "Invalid screen image"
-            )
+            return CandleSignal("WAIT", 0, 0, 0, "Invalid screen image")
         }
 
         val detectedBars = detectCandles(bitmap)
 
+        // শেষ ক্যান্ডেলটি চলমান হতে পারে; তাই বাদ দেওয়া হচ্ছে।
         val bars = if (detectedBars.size > 1) {
             detectedBars.dropLast(1)
         } else {
@@ -83,7 +77,7 @@ object CandleAnalyzer {
         }
 
         val green = bars.count { it.bullish }
-        val red = bars.count { !it.bullish }
+        val red = bars.size - green
 
         if (bars.size < 8) {
             return CandleSignal(
@@ -101,20 +95,16 @@ object CandleAnalyzer {
         val trendMove = bars.first().closeY - last.closeY
 
         val higherHigh = highs.size >= 2 &&
-            highs.last().levelY <
-            highs[highs.lastIndex - 1].levelY
+            highs.last().levelY < highs[highs.lastIndex - 1].levelY
 
         val higherLow = lows.size >= 2 &&
-            lows.last().levelY <
-            lows[lows.lastIndex - 1].levelY
+            lows.last().levelY < lows[lows.lastIndex - 1].levelY
 
         val lowerHigh = highs.size >= 2 &&
-            highs.last().levelY >
-            highs[highs.lastIndex - 1].levelY
+            highs.last().levelY > highs[highs.lastIndex - 1].levelY
 
         val lowerLow = lows.size >= 2 &&
-            lows.last().levelY >
-            lows[lows.lastIndex - 1].levelY
+            lows.last().levelY > lows[lows.lastIndex - 1].levelY
 
         val trend = when {
             higherHigh && higherLow -> "UPTREND"
@@ -129,19 +119,16 @@ object CandleAnalyzer {
 
         val bullishBOS = lastSwingHigh != null &&
             lastSwingHigh.index < bars.lastIndex - 1 &&
-            previous.closeY >= lastSwingHigh.levelY &&
+            previous.closeY > lastSwingHigh.levelY &&
             last.closeY < lastSwingHigh.levelY
 
         val bearishBOS = lastSwingLow != null &&
             lastSwingLow.index < bars.lastIndex - 1 &&
-            previous.closeY <= lastSwingLow.levelY &&
+            previous.closeY < lastSwingLow.levelY &&
             last.closeY > lastSwingLow.levelY
 
-        val bullishCHOCH =
-            trend == "DOWNTREND" && bullishBOS
-
-        val bearishCHOCH =
-            trend == "UPTREND" && bearishBOS
+        val bullishCHOCH = trend == "DOWNTREND" && bullishBOS
+        val bearishCHOCH = trend == "UPTREND" && bearishBOS
 
         val averageRange = bars.takeLast(10)
             .map { it.range }
@@ -178,11 +165,7 @@ object CandleAnalyzer {
             last.upperWick > last.lowerWick &&
             nearResistance
 
-        val pattern = detectPattern(
-            previous,
-            last,
-            trendMove
-        )
+        val pattern = detectPattern(previous, last, trendMove)
 
         var score = 0
 
@@ -233,11 +216,9 @@ object CandleAnalyzer {
             (if (bearishSweep) 1 else 0) +
             (if (bearishRejection) 1 else 0)
 
-        val conflict =
-            bullishEvidence > 0 && bearishEvidence > 0
+        val conflict = bullishEvidence > 0 && bearishEvidence > 0
 
-        var confidence = (abs(score) * 5)
-            .coerceIn(0, 85)
+        var confidence = (abs(score) * 5).coerceIn(0, 85)
 
         if (conflict) {
             confidence = (confidence - 15).coerceAtLeast(0)
@@ -250,116 +231,65 @@ object CandleAnalyzer {
             else -> "WAIT"
         }
 
-        val structureText = when {
-            higherHigh && higherLow ->
-                "Higher High + Higher Low"
-            lowerHigh && lowerLow ->
-                "Lower High + Lower Low"
+        val structure = when {
+            higherHigh && higherLow -> "Higher High + Higher Low"
+            lowerHigh && lowerLow -> "Lower High + Lower Low"
             else -> "Mixed Structure"
         }
 
-        val bosText = when {
+        val bos = when {
             bullishBOS -> "Bullish BOS"
             bearishBOS -> "Bearish BOS"
             else -> "No Fresh BOS"
         }
 
-        val chochText = when {
+        val choch = when {
             bullishCHOCH -> "Bullish CHOCH"
             bearishCHOCH -> "Bearish CHOCH"
             else -> "No CHOCH"
         }
 
-        val sweepText = when {
+        val sweep = when {
             bullishSweep -> "Bullish Liquidity Sweep"
             bearishSweep -> "Bearish Liquidity Sweep"
             else -> "No Liquidity Sweep"
         }
 
-        val rejectionText = when {
+        val wick = when {
             bullishRejection -> "Bullish Wick Rejection"
             bearishRejection -> "Bearish Wick Rejection"
             else -> "No Strong Rejection"
         }
 
-        val locationText = when {
+        val location = when {
             nearSupport -> "Near Support"
             nearResistance -> "Near Resistance"
             else -> "Between Levels"
         }
 
-        val directionText = when (signal) {
+        val direction = when (signal) {
             "UP" -> "সম্ভাব্য দিক: UP"
             "DOWN" -> "সম্ভাব্য দিক: DOWN"
             else -> "সম্ভাব্য দিক পরিষ্কার নয়: WAIT"
         }
 
         val message = buildString {
-            append(directionText)
+            append(direction)
             append(" | Trend: $trend")
-            append(" | Structure: $structureText")
-            append(" | $bosText")
-            append(" | $chochText")
-            append(" | $sweepText")
-            append(" | $rejectionText")
-            append(" | $locationText")
+            append(" | Structure: $structure")
+            append(" | $bos | $choch")
+            append(" | $sweep | $wick")
+            append(" | Support/Resistance: $location")
             append(" | Pattern: $pattern")
+            append(" | Upper Wick: ${last.upperWick}")
+            append(" | Lower Wick: ${last.lowerWick}")
+            append(" | Body: ${last.body}")
             append(" | Conflict: $conflict")
             append(" | Green: $green, Red: $red")
             append(" | Total: ${bars.size}")
         }
 
-        return CandleSignal(
-            signal,
-            confidence,
-            green,
-            red,
-            message
-        )
-    }
-
-    private fun findSwingHighs(
-        bars: List<Bar>
-    ): List<Swing> {
-        val result = mutableListOf<Swing>()
-        val radius = 2
-
-        for (i in radius until bars.size - radius) {
-            val current = bars[i].topY
-
-            val isSwingHigh = (1..radius).all { distance ->
-                current < bars[i - distance].topY &&
-                    current < bars[i + distance].topY
-            }
-
-            if (isSwingHigh) {
-                result.add(Swing(i, current))
-            }
-        }
-
-        return result
-    }
-
-    private fun findSwingLows(
-        bars: List<Bar>
-    ): List<Swing> {
-        val result = mutableListOf<Swing>()
-        val radius = 2
-
-        for (i in radius until bars.size - radius) {
-            val current = bars[i].bottomY
-
-            val isSwingLow = (1..radius).all { distance ->
-                current > bars[i - distance].bottomY &&
-                    current > bars[i + distance].bottomY
-            }
-
-            if (isSwingLow) {
-                result.add(Swing(i, current))
-            }
-        }
-
-        return result
+        return CandleSignal(signal, confidence, green, red, message)
     }
 
     private fun detectPattern(
@@ -369,10 +299,7 @@ object CandleAnalyzer {
     ): String {
         val body = current.body.coerceAtLeast(1)
 
-        if (
-            current.body <=
-            maxOf(2, (current.range * 0.12).toInt())
-        ) {
+        if (current.body <= maxOf(2, (current.range * 0.12).toInt())) {
             return "Doji"
         }
 
@@ -408,12 +335,50 @@ object CandleAnalyzer {
         return "None"
     }
 
+    private fun findSwingHighs(bars: List<Bar>): List<Swing> {
+        val result = mutableListOf<Swing>()
+        val radius = 2
+
+        for (i in radius until bars.size - radius) {
+            val current = bars[i].topY
+
+            if ((1..radius).all { d ->
+                    current < bars[i - d].topY &&
+                    current < bars[i + d].topY
+                }
+            ) {
+                result.add(Swing(i, current))
+            }
+        }
+
+        return result
+    }
+
+    private fun findSwingLows(bars: List<Bar>): List<Swing> {
+        val result = mutableListOf<Swing>()
+        val radius = 2
+
+        for (i in radius until bars.size - radius) {
+            val current = bars[i].bottomY
+
+            if ((1..radius).all { d ->
+                    current > bars[i - d].bottomY &&
+                    current > bars[i + d].bottomY
+                }
+            ) {
+                result.add(Swing(i, current))
+            }
+        }
+
+        return result
+    }
+
     private fun detectCandles(bitmap: Bitmap): List<Bar> {
         if (bitmap.width < 100 || bitmap.height < 100) {
             return emptyList()
         }
 
-        val left = (bitmap.width * 0.00f).toInt()
+        val left = 0
         val right = (bitmap.width * 0.95f).toInt()
         val top = (bitmap.height * 0.12f).toInt()
         val bottom = (bitmap.height * 0.69f).toInt()
@@ -458,13 +423,23 @@ object CandleAnalyzer {
             var end = x
             x++
 
-            while (x < width && types[x] == type) {
-                end = x
-                x++
+            // Bridge only a one-pixel detection hole of the same color.
+            while (x < width) {
+                if (types[x] == type) {
+                    end = x
+                    x++
+                } else if (
+                    types[x] == 0 &&
+                    x + 1 < width &&
+                    types[x + 1] == type
+                ) {
+                    x++
+                } else {
+                    break
+                }
             }
 
             val candleWidth = end - start + 1
-
             if (candleWidth > 25) continue
 
             val rows = IntArray(height)
