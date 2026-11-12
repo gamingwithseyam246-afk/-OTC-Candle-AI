@@ -113,18 +113,18 @@ class FloatingWindowService : Service() {
 
         val title = TextView(this).apply {
             text = "OTC CANDLE AI"
-            textSize = 6f
+            textSize = 5.5f
             includeFontPadding = false
             setTextColor(Color.WHITE)
-            setPadding(0, 0, dp(2), 0)
+            setPadding(0, 0, dp(1), 0)
         }
 
         val close = TextView(this).apply {
             text = "X"
-            textSize = 7f
+            textSize = 6f
             includeFontPadding = false
             setTextColor(Color.WHITE)
-            setPadding(dp(2), 0, 0, 0)
+            setPadding(dp(1), 0, 0, 0)
             setOnClickListener { hidePanel() }
         }
 
@@ -133,7 +133,7 @@ class FloatingWindowService : Service() {
 
         signal = TextView(this).apply {
             text = "WAIT"
-            textSize = 9f
+            textSize = 8f
             includeFontPadding = false
             setTextColor(Color.YELLOW)
             setSingleLine(true)
@@ -141,7 +141,7 @@ class FloatingWindowService : Service() {
 
         score = TextView(this).apply {
             text = "Score: --%"
-            textSize = 6f
+            textSize = 5.5f
             includeFontPadding = false
             setTextColor(Color.WHITE)
             setSingleLine(true)
@@ -149,13 +149,13 @@ class FloatingWindowService : Service() {
 
         info = TextView(this).apply {
             text = "Waiting..."
-            textSize = 5.5f
+            textSize = 5f
             includeFontPadding = false
             setTextColor(Color.LTGRAY)
             setSingleLine(false)
             maxLines = Int.MAX_VALUE
             ellipsize = null
-            maxWidth = dp(160)
+            maxWidth = dp(145)
         }
 
         root.addView(header)
