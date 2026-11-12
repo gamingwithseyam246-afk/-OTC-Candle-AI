@@ -64,7 +64,6 @@ object CandleAnalyzer {
     }
 
     fun analyze(bitmap: Bitmap): CandleSignal {
-
         if (bitmap.isRecycled ||
             bitmap.width < 100 ||
             bitmap.height < 100
@@ -77,8 +76,6 @@ object CandleAnalyzer {
 
         val detectedBars = detectCandles(bitmap)
 
-        // শেষ ক্যান্ডেলটি অসম্পূর্ণ হতে পারে।
-        // বাকি সব শনাক্ত হওয়া ক্যান্ডেল বিশ্লেষণ হবে।
         val bars = if (detectedBars.size > 1) {
             detectedBars.dropLast(1)
         } else {
@@ -256,10 +253,8 @@ object CandleAnalyzer {
         val structureText = when {
             higherHigh && higherLow ->
                 "Higher High + Higher Low"
-
             lowerHigh && lowerLow ->
                 "Lower High + Lower Low"
-
             else -> "Mixed Structure"
         }
 
@@ -326,7 +321,6 @@ object CandleAnalyzer {
     private fun findSwingHighs(
         bars: List<Bar>
     ): List<Swing> {
-
         val result = mutableListOf<Swing>()
         val radius = 2
 
@@ -349,7 +343,6 @@ object CandleAnalyzer {
     private fun findSwingLows(
         bars: List<Bar>
     ): List<Swing> {
-
         val result = mutableListOf<Swing>()
         val radius = 2
 
@@ -374,7 +367,6 @@ object CandleAnalyzer {
         current: Bar,
         trend: Int
     ): String {
-
         val body = current.body.coerceAtLeast(1)
 
         if (
@@ -417,12 +409,10 @@ object CandleAnalyzer {
     }
 
     private fun detectCandles(bitmap: Bitmap): List<Bar> {
-
         if (bitmap.width < 100 || bitmap.height < 100) {
             return emptyList()
         }
 
-        // চার্টের বেশি অংশ স্ক্যান করা হবে
         val left = (bitmap.width * 0.00f).toInt()
         val right = (bitmap.width * 0.95f).toInt()
         val top = (bitmap.height * 0.12f).toInt()
@@ -457,7 +447,6 @@ object CandleAnalyzer {
         var x = 0
 
         while (x < width) {
-
             val type = types[x]
 
             if (type == 0) {
@@ -469,7 +458,6 @@ object CandleAnalyzer {
             var end = x
             x++
 
-            // পাশের ক্যান্ডেলের ফাঁক জোড়া দেওয়া হবে না
             while (x < width && types[x] == type) {
                 end = x
                 x++
@@ -499,7 +487,6 @@ object CandleAnalyzer {
             if (peak < 1) continue
 
             val threshold = maxOf(1, (peak * 0.40f).toInt())
-
             val peakY = rows.indices.maxByOrNull { rows[it] } ?: continue
 
             var bodyTop = peakY
