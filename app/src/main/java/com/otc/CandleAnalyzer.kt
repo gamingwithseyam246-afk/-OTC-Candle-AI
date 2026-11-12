@@ -4,6 +4,9 @@ package com.otc.candleai
 import android.graphics.Bitmap
 import android.graphics.Color
 import kotlin.math.abs
+import kotlin.math.ceil
+import kotlin.math.max
+import kotlin.math.min
 
 data class CandleSignal(
     val signal: String,
@@ -17,570 +20,381 @@ object CandleAnalyzer {
 
     private data class Bar(
         val bullish: Boolean,
-        val body: Int,
-        val upperWick: Int,
-        val lowerWick: Int,
-        val centerX: Int,
-        val closeY: Int,
-        val topY: Int,
-        val bottomY: Int,
-        val bodyTop: Int,
-        val bodyBottom: Int
-    ) {
-        val range: Int
-            get() = bottomY - topY + 1
-    }
-
-    private data class Swing(
-        val index: Int,
-        val levelY: Int
+        val body: Float,
+        val upperWick: Float,
+        val lowerWick: Float,
+        val centerX: Float,
+        val closeY: Float,
+        val topY: Float,
+        val bottomY: Float
     )
 
-    private fun colorType(color: Int): Int {
-        val r = Color.red(color)
-        val g = Color.green(color)
-        val b = Color.blue(color)
-
-        val hsv = FloatArray(3)
-        Color.colorToHSV(color, hsv)
-
-        val hue = hsv[0]
-        val saturation = hsv[1]
-        val value = hsv[2]
-
-        if (saturation < 0.35f || value < 0.20f) return 0
-
-        return when {
-            hue in 85f..175f &&
-                g > r * 1.15 &&
-                g > b * 1.05 -> 1
-
-            (hue <= 18f || hue >= 340f) &&
-                r > g * 1.25 &&
-                r > b * 1.15 -> 2
-
-            else -> 0
-        }
-    }
+    private data class Column(
+        val x: Int,
+        val type: Int,
+        val pixels: List<Int>
+    )
 
     fun analyze(bitmap: Bitmap): CandleSignal {
 
-        if (bitmap.isRecycled ||
-            bitmap.width < 100 ||
-            bitmap.height < 100
-        ) {
-            return CandleSignal(
-                "WAIT", 0, 0, 0,
-                "Invalid screen image"
-            )
+        if (bitmap.isRecycled || bitmap.width <= 0 || bitmap.height <= 0) {
+            return waitResult("Invalid screen image")
         }
 
         val detectedBars = detectCandles(bitmap)
 
-        // শেষ ক্যান্ডেলটি অসম্পূর্ণ হতে পারে।
-        val bars = if (detectedBars.size > 1) {
-            detectedBars.dropLast(1).takeLast(30)
-        } else {
-            emptyList()
-        }
-
-        val green = bars.count { it.bullish }
-        val red = bars.count { !it.bullish }
-
-        if (bars.size < 8) {
-            return CandleSignal(
-                "WAIT", 0, green, red,
-                "সম্পূর্ণ ক্যান্ডেল কম: ${bars.size}টি (Detected: ${detectedBars.size})"
+        if (detectedBars.size < 2) {
+            return waitResult(
+                "Not enough candles detected: ${detectedBars.size}"
             )
         }
 
-        val highs = findSwingHighs(bars)
-        val lows = findSwingLows(bars)
+        // The rightmost detected candle is treated as incomplete.
+        // All other detected candles are included; no last-30 limit.
+        val bars = detectedBars.dropLast(1)
 
-        val last = bars.last()
-        val previous = bars[bars.lastIndex - 1]
+        val greenCount = bars.count { it.bullish }
+        val redCount = bars.size - greenCount
 
-        // ছোট Y মান মানে চার্টে দাম উপরে।
-        val trendMove = bars.first().closeY - last.closeY
-
-        val higherHigh = highs.size >= 2 &&
-            highs.last().levelY <
-            highs[highs.lastIndex - 1].levelY
-
-        val higherLow = lows.size >= 2 &&
-            lows.last().levelY <
-            lows[lows.lastIndex - 1].levelY
-
-        val lowerHigh = highs.size >= 2 &&
-            highs.last().levelY >
-            highs[highs.lastIndex - 1].levelY
-
-        val lowerLow = lows.size >= 2 &&
-            lows.last().levelY >
-            lows[lows.lastIndex - 1].levelY
-
-        val trend = when {
-            higherHigh && higherLow -> "UPTREND"
-            lowerHigh && lowerLow -> "DOWNTREND"
-            trendMove > 8 -> "POSSIBLE UPTREND"
-            trendMove < -8 -> "POSSIBLE DOWNTREND"
-            else -> "SIDEWAYS"
+        if (bars.size < 5) {
+            return CandleSignal(
+                "WAIT",
+                30,
+                greenCount,
+                redCount,
+                "Only ${bars.size} completed candles. More data needed."
+            )
         }
 
-        val lastSwingHigh = highs.lastOrNull()
-        val lastSwingLow = lows.lastOrNull()
+        var score = 0f
+        var maximumScore = 0f
 
-        val bullishBOS = lastSwingHigh != null &&
-            lastSwingHigh.index < bars.lastIndex - 1 &&
-            previous.closeY >= lastSwingHigh.levelY &&
-            last.closeY < lastSwingHigh.levelY
+        // Analyze every completed candle.
+        for (i in bars.indices) {
 
-        val bearishBOS = lastSwingLow != null &&
-            lastSwingLow.index < bars.lastIndex - 1 &&
-            previous.closeY <= lastSwingLow.levelY &&
-            last.closeY > lastSwingLow.levelY
+            val bar = bars[i]
 
-        val bullishCHOCH =
-            trend == "DOWNTREND" && bullishBOS
+            // Recent candles receive more weight, but older candles
+            // are still included in the calculation.
+            val recencyWeight =
+                0.5f + 0.5f * (i + 1).toFloat() / bars.size
 
-        val bearishCHOCH =
-            trend == "UPTREND" && bearishBOS
+            val candleRange =
+                max(1f, bar.body + bar.upperWick + bar.lowerWick)
 
-        val averageRange = bars.takeLast(10)
-            .map { it.range }
-            .average()
-            .toInt()
-            .coerceAtLeast(1)
+            val bodyStrength =
+                (bar.body / candleRange).coerceIn(0f, 1f)
 
-        val levelDistance = maxOf(8, averageRange * 2)
-        val sweepBuffer = maxOf(2, averageRange / 5)
+            val direction = if (bar.bullish) 1f else -1f
 
-        val nearSupport = lastSwingLow != null &&
-            abs(last.bottomY - lastSwingLow.levelY) <= levelDistance
+            score += direction * bodyStrength * recencyWeight
+            maximumScore += recencyWeight
 
-        val nearResistance = lastSwingHigh != null &&
-            abs(last.topY - lastSwingHigh.levelY) <= levelDistance
+            // Lower wick rejection can support upward movement.
+            val lowerRejection =
+                (bar.lowerWick / candleRange).coerceIn(0f, 1f)
 
-        // Liquidity Sweep:
-        // নিচের লেভেল ভেঙে আবার উপরে Close = Bullish Sweep
-        val bullishSweep = lastSwingLow != null &&
-            lastSwingLow.index < bars.lastIndex &&
-            last.bottomY > lastSwingLow.levelY + sweepBuffer &&
-            last.closeY < lastSwingLow.levelY
+            // Upper wick rejection can support downward movement.
+            val upperRejection =
+                (bar.upperWick / candleRange).coerceIn(0f, 1f)
 
-        // উপরের লেভেল ভেঙে আবার নিচে Close = Bearish Sweep
-        val bearishSweep = lastSwingHigh != null &&
-            lastSwingHigh.index < bars.lastIndex &&
-            last.topY < lastSwingHigh.levelY - sweepBuffer &&
-            last.closeY > lastSwingHigh.levelY
+            score += lowerRejection * 0.35f * recencyWeight
+            score -= upperRejection * 0.35f * recencyWeight
 
-        val bullishRejection =
-            last.lowerWick >= last.body.coerceAtLeast(1) * 2 &&
-            last.lowerWick > last.upperWick &&
-            nearSupport
+            maximumScore += 0.35f * recencyWeight
+        }
 
-        val bearishRejection =
-            last.upperWick >= last.body.coerceAtLeast(1) * 2 &&
-            last.upperWick > last.lowerWick &&
-            nearResistance
+        // Compare early and recent candle positions.
+        val firstClose = bars.first().closeY
+        val lastClose = bars.last().closeY
 
-        val pattern = detectPattern(
-            previous,
-            last,
-            trendMove
+        val priceMovement = firstClose - lastClose
+
+        val chartHeight = max(
+            1f,
+            bars.maxOf { it.bottomY } - bars.minOf { it.topY }
         )
 
-        // Weighted signal score.
-        // Positive = UP, Negative = DOWN.
-        var score = 0
+        val normalizedMovement =
+            (priceMovement / chartHeight).coerceIn(-1f, 1f)
 
-        when (trend) {
-            "UPTREND" -> score += 3
-            "DOWNTREND" -> score -= 3
-            "POSSIBLE UPTREND" -> score += 1
-            "POSSIBLE DOWNTREND" -> score -= 1
-        }
+        score += normalizedMovement * 2f
+        maximumScore += 2f
 
-        if (higherHigh && higherLow) score += 2
-        if (lowerHigh && lowerLow) score -= 2
+        // Recent momentum.
+        val recentBars = bars.takeLast(min(3, bars.size))
 
-        if (bullishBOS) score += 5
-        if (bearishBOS) score -= 5
+        val recentBullish = recentBars.count { it.bullish }
+        val recentBearish = recentBars.size - recentBullish
 
-        if (bullishCHOCH) score += 3
-        if (bearishCHOCH) score -= 3
+        val momentum =
+            (recentBullish - recentBearish).toFloat() /
+                recentBars.size
 
-        if (bullishSweep) score += 5
-        if (bearishSweep) score -= 5
+        score += momentum * 1.5f
+        maximumScore += 1.5f
 
-        if (bullishRejection) score += 2
-        if (bearishRejection) score -= 2
+        val ratio = (score / max(1f, maximumScore))
+            .coerceIn(-1f, 1f)
 
-        if (nearSupport && last.bullish) score += 1
-        if (nearResistance && !last.bullish) score -= 1
+        val strength = abs(ratio)
 
-        when (pattern) {
-            "Hammer" -> score += 2
-            "Shooting Star" -> score -= 2
-            "Bullish Engulfing" -> score += 3
-            "Bearish Engulfing" -> score -= 3
-        }
-
-        // Recent candle momentum.
-        bars.takeLast(5).forEachIndexed { index, bar ->
-            val weight = index + 1
-            score += if (bar.bullish) weight else -weight
-        }
-
-        // Mixed opposing signals reduce confidence.
-        val bullishEvidence =
-            (if (bullishBOS) 1 else 0) +
-            (if (bullishSweep) 1 else 0) +
-            (if (bullishRejection) 1 else 0)
-
-        val bearishEvidence =
-            (if (bearishBOS) 1 else 0) +
-            (if (bearishSweep) 1 else 0) +
-            (if (bearishRejection) 1 else 0)
-
-        val conflict =
-            bullishEvidence > 0 && bearishEvidence > 0
-
-        var confidence = (abs(score) * 5)
-            .coerceIn(0, 85)
-
-        if (conflict) {
-            confidence = (confidence - 15).coerceAtLeast(0)
-        }
+        val confidence = (
+            50f + strength * 45f
+        ).toInt().coerceIn(30, 95)
 
         val signal = when {
-            confidence < 25 -> "WAIT"
-            score >= 5 -> "UP"
-            score <= -5 -> "DOWN"
+            ratio >= 0.18f -> "UP"
+            ratio <= -0.18f -> "DOWN"
             else -> "WAIT"
         }
 
-        val structureText = when {
-            higherHigh && higherLow ->
-                "Higher High + Higher Low"
-
-            lowerHigh && lowerLow ->
-                "Lower High + Lower Low"
-
-            else -> "Mixed Structure"
-        }
-
-        val bosText = when {
-            bullishBOS -> "Bullish BOS"
-            bearishBOS -> "Bearish BOS"
-            else -> "No Fresh BOS"
-        }
-
-        val chochText = when {
-            bullishCHOCH -> "Bullish CHOCH"
-            bearishCHOCH -> "Bearish CHOCH"
-            else -> "No CHOCH"
-        }
-
-        val sweepText = when {
-            bullishSweep -> "Bullish Liquidity Sweep"
-            bearishSweep -> "Bearish Liquidity Sweep"
-            else -> "No Liquidity Sweep"
-        }
-
-        val rejectionText = when {
-            bullishRejection -> "Bullish Wick Rejection"
-            bearishRejection -> "Bearish Wick Rejection"
-            else -> "No Strong Rejection"
-        }
-
-        val locationText = when {
-            nearSupport -> "Near Support"
-            nearResistance -> "Near Resistance"
-            else -> "Between Levels"
-        }
-
-        val directionText = when (signal) {
-            "UP" -> "সম্ভাব্য দিক: UP"
-            "DOWN" -> "সম্ভাব্য দিক: DOWN"
-            else -> "সম্ভাব্য দিক পরিষ্কার নয়: WAIT"
+        val trend = when {
+            normalizedMovement > 0.04f -> "UPTREND"
+            normalizedMovement < -0.04f -> "DOWNTREND"
+            else -> "SIDEWAYS"
         }
 
         val message = buildString {
-            append(directionText)
+            append("Visible candles: ${detectedBars.size}")
+            append(" | Analyzed: ${bars.size}")
+            append(" | Green: $greenCount")
+            append(" | Red: $redCount")
             append(" | Trend: $trend")
-            append(" | Structure: $structureText")
-            append(" | $bosText")
-            append(" | $chochText")
-            append(" | $sweepText")
-            append(" | $rejectionText")
-            append(" | $locationText")
-            append(" | Pattern: $pattern")
-            append(" | Conflict: $conflict")
-            append(" | Green: $green, Red: $red")
-            append(" | Total: ${bars.size}")
+            append(" | Momentum: ")
+            append(
+                when {
+                    momentum > 0.2f -> "BULLISH"
+                    momentum < -0.2f -> "BEARISH"
+                    else -> "NEUTRAL"
+                }
+            )
         }
 
         return CandleSignal(
-            signal,
-            confidence,
-            green,
-            red,
-            message
+            signal = signal,
+            confidence = confidence,
+            greenCount = greenCount,
+            redCount = redCount,
+            message = message
         )
     }
 
-    private fun findSwingHighs(
-        bars: List<Bar>
-    ): List<Swing> {
+    private fun detectCandles(bitmap: Bitmap): List<Bar> {
 
-        val result = mutableListOf<Swing>()
-        val radius = 2
+        val width = bitmap.width
+        val height = bitmap.height
 
-        for (i in radius until bars.size - radius) {
-            val current = bars[i].topY
+        // Chart scanning area.
+        // Right-side price scale and extreme screen edges are excluded.
+        val left = (width * 0.00f).toInt()
+        val right = (width * 0.90f).toInt()
 
-            val isSwingHigh = (1..radius).all { distance ->
-                current < bars[i - distance].topY &&
-                    current < bars[i + distance].topY
-            }
+        val top = (height * 0.12f).toInt()
+        val bottom = (height * 0.69f).toInt()
 
-            if (isSwingHigh) {
-                result.add(Swing(i, current))
-            }
-        }
+        val columns = mutableListOf<Column>()
 
-        return result
-    }
+        for (x in left until right) {
 
-    private fun findSwingLows(
-        bars: List<Bar>
-    ): List<Swing> {
+            val greenPixels = mutableListOf<Int>()
+            val redPixels = mutableListOf<Int>()
 
-        val result = mutableListOf<Swing>()
-        val radius = 2
+            for (y in top until bottom) {
 
-        for (i in radius until bars.size - radius) {
-            val current = bars[i].bottomY
+                val pixel = bitmap.getPixel(x, y)
+                val type = colorType(pixel)
 
-            val isSwingLow = (1..radius).all { distance ->
-                current > bars[i - distance].bottomY &&
-                    current > bars[i + distance].bottomY
-            }
-
-            if (isSwingLow) {
-                result.add(Swing(i, current))
-            }
-        }
-
-        return result
-    }
-
-    private fun detectPattern(
-        previous: Bar,
-        current: Bar,
-        trend: Int
-    ): String {
-
-        val body = current.body.coerceAtLeast(1)
-
-        if (
-            current.body <=
-            maxOf(2, (current.range * 0.12).toInt())
-        ) {
-            return "Doji"
-        }
-
-        if (
-            current.lowerWick >= body * 2 &&
-            current.upperWick <= body &&
-            trend < 0
-        ) {
-            return "Hammer"
-        }
-
-        if (
-            current.upperWick >= body * 2 &&
-            current.lowerWick <= body &&
-            trend > 0
-        ) {
-            return "Shooting Star"
-        }
-
-        val engulfing =
-            current.bodyTop <= previous.bodyTop &&
-            current.bodyBottom >= previous.bodyBottom &&
-            current.body > previous.body
-
-        if (engulfing && current.bullish && !previous.bullish) {
-            return "Bullish Engulfing"
-        }
-
-        if (engulfing && !current.bullish && previous.bullish) {
-            return "Bearish Engulfing"
-        }
-
-        return "None"
-    }
-
-    private fun detectCandles(
-        bitmap: Bitmap
-    ): List<Bar> {
-
-        if (bitmap.width < 100 || bitmap.height < 100) {
-            return emptyList()
-        }
-
-        // Quotex chart detection area.
-        val left = (bitmap.width * 0.00f).toInt()
-        val right = (bitmap.width * 0.57f).toInt()
-        val top = (bitmap.height * 0.12f).toInt()
-        val bottom = (bitmap.height * 0.69f).toInt()
-
-        val width = right - left
-        val height = bottom - top
-
-        if (width <= 0 || height <= 0) {
-            return emptyList()
-        }
-
-        val types = IntArray(width)
-
-        for (x in 0 until width) {
-            var green = 0
-            var red = 0
-
-            for (y in 0 until height) {
-                when (
-                    colorType(
-                        bitmap.getPixel(left + x, top + y)
-                    )
-                ) {
-                    1 -> green++
-                    2 -> red++
+                if (type == 1) {
+                    greenPixels.add(y)
+                } else if (type == -1) {
+                    redPixels.add(y)
                 }
             }
 
-            types[x] = when {
-                green >= 3 && green > red * 1.3 -> 1
-                red >= 3 && red > green * 1.3 -> 2
+            val selectedType = when {
+                greenPixels.size >= redPixels.size &&
+                    greenPixels.size >= 2 -> 1
+
+                redPixels.size > greenPixels.size &&
+                    redPixels.size >= 2 -> -1
+
                 else -> 0
+            }
+
+            if (selectedType != 0) {
+                columns.add(
+                    Column(
+                        x = x,
+                        type = selectedType,
+                        pixels = if (selectedType == 1) {
+                            greenPixels
+                        } else {
+                            redPixels
+                        }
+                    )
+                )
             }
         }
 
-        val result = mutableListOf<Bar>()
-        var x = 0
+        if (columns.isEmpty()) return emptyList()
 
-        while (x < width) {
+        val groups = mutableListOf<MutableList<Column>>()
+        var currentGroup = mutableListOf<Column>()
 
-            val type = types[x]
+        for (column in columns) {
 
-            if (type == 0) {
-                x++
+            if (currentGroup.isEmpty()) {
+                currentGroup.add(column)
                 continue
             }
 
-            val start = x
-            var end = x
-            x++
+            val previous = currentGroup.last()
 
-            while (x < width) {
-                if (types[x] == type) {
-                    end = x
-                    x++
-                } else if (
-                    x + 1 < width &&
-                    types[x] == 0 &&
-                    types[x + 1] == type
-                ) {
-                    end = x + 1
-                    x += 2
-                } else {
-                    break
+            val sameCandle =
+                column.type == previous.type &&
+                    column.x - previous.x <= 3
+
+            if (sameCandle) {
+                currentGroup.add(column)
+            } else {
+                if (currentGroup.isNotEmpty()) {
+                    groups.add(currentGroup)
+                }
+
+                currentGroup = mutableListOf(column)
+            }
+        }
+
+        if (currentGroup.isNotEmpty()) {
+            groups.add(currentGroup)
+        }
+
+        val bars = mutableListOf<Bar>()
+
+        for (group in groups) {
+
+            val candleWidth =
+                group.last().x - group.first().x + 1
+
+            if (candleWidth > 25 || candleWidth < 1) {
+                continue
+            }
+
+            val allPixels = group.flatMap { it.pixels }
+
+            if (allPixels.size < 5) continue
+
+            val overallTop = allPixels.minOrNull() ?: continue
+            val overallBottom = allPixels.maxOrNull() ?: continue
+
+            if (overallBottom <= overallTop) continue
+
+            // Find the dense body rows.
+            val rowCounts = mutableMapOf<Int, Int>()
+
+            for (column in group) {
+                for (y in column.pixels) {
+                    rowCounts[y] = (rowCounts[y] ?: 0) + 1
                 }
             }
 
-            val candleWidth = end - start + 1
-
-            if (candleWidth > 25) continue
-
-            val rows = IntArray(height)
-            var minY = height
-            var maxY = -1
-
-            for (cx in start..end) {
-                for (cy in 0 until height) {
-
-                    if (
-                        colorType(
-                            bitmap.getPixel(left + cx, top + cy)
-                        ) == type
-                    ) {
-                        rows[cy]++
-                        minY = minOf(minY, cy)
-                        maxY = maxOf(maxY, cy)
-                    }
-                }
-            }
-
-            if (maxY < minY) continue
-
-            val peak = rows.maxOrNull() ?: 0
-            if (peak < 1) continue
-
-            val threshold = maxOf(
-                1,
-                (peak * 0.40f).toInt()
+            val bodyThreshold = max(
+                2,
+                ceil(candleWidth * 0.35f).toInt()
             )
 
-            val peakY = rows.indices.maxByOrNull {
-                rows[it]
-            } ?: continue
+            val bodyRows = rowCounts
+                .filter { it.value >= bodyThreshold }
+                .keys
+                .sorted()
 
-            var bodyTop = peakY
-            var bodyBottom = peakY
+            val bodyTop: Int
+            val bodyBottom: Int
 
-            while (
-                bodyTop > minY &&
-                rows[bodyTop - 1] >= threshold
-            ) {
-                bodyTop--
+            if (bodyRows.isNotEmpty()) {
+
+                bodyTop = bodyRows.first()
+                bodyBottom = bodyRows.last()
+
+            } else {
+
+                bodyTop = overallTop
+                bodyBottom = overallBottom
             }
 
-            while (
-                bodyBottom < maxY &&
-                rows[bodyBottom + 1] >= threshold
-            ) {
-                bodyBottom++
+            val bodyHeight = max(
+                1,
+                bodyBottom - bodyTop
+            )
+
+            val upperWick = max(
+                0,
+                bodyTop - overallTop
+            )
+
+            val lowerWick = max(
+                0,
+                overallBottom - bodyBottom
+            )
+
+            val bullish = group.first().type == 1
+
+            val closeY = if (bullish) {
+                bodyTop.toFloat()
+            } else {
+                bodyBottom.toFloat()
             }
 
-            val body = bodyBottom - bodyTop + 1
-            val upperWick = bodyTop - minY
-            val lowerWick = maxY - bodyBottom
-            val totalHeight = maxY - minY + 1
+            val centerX = (
+                group.first().x + group.last().x
+            ) / 2f
 
-            if (totalHeight < 6 || body < 1) continue
-
-            result.add(
+            bars.add(
                 Bar(
-                    bullish = type == 1,
-                    body = body,
-                    upperWick = upperWick,
-                    lowerWick = lowerWick,
-                    centerX = left + (start + end) / 2,
-                    closeY = if (type == 1) {
-                        bodyTop + top
-                    } else {
-                        bodyBottom + top
-                    },
-                    topY = minY + top,
-                    bottomY = maxY + top,
-                    bodyTop = bodyTop + top,
-                    bodyBottom = bodyBottom + top
+                    bullish = bullish,
+                    body = bodyHeight.toFloat(),
+                    upperWick = upperWick.toFloat(),
+                    lowerWick = lowerWick.toFloat(),
+                    centerX = centerX,
+                    closeY = closeY,
+                    topY = overallTop.toFloat(),
+                    bottomY = overallBottom.toFloat()
                 )
             )
         }
 
-        return result.sortedBy { it.centerX }
+        return bars.sortedBy { it.centerX }
+    }
+
+    private fun colorType(pixel: Int): Int {
+
+        val hsv = FloatArray(3)
+
+        Color.colorToHSV(pixel, hsv)
+
+        val hue = hsv[0]
+        val saturation = hsv[1]
+        val brightness = hsv[2]
+
+        if (saturation < 0.35f || brightness < 0.25f) {
+            return 0
+        }
+
+        return when {
+            hue in 75f..175f -> 1
+            hue <= 20f || hue >= 340f -> -1
+            else -> 0
+        }
+    }
+
+    private fun waitResult(message: String): CandleSignal {
+        return CandleSignal(
+            signal = "WAIT",
+            confidence = 0,
+            greenCount = 0,
+            redCount = 0,
+            message = message
+        )
     }
 }
