@@ -25,7 +25,6 @@ class FloatingWindowService : Service() {
     companion object {
         const val ACTION_SHOW = "com.otc.candleai.SHOW_PANEL"
         const val ACTION_HIDE = "com.otc.candleai.HIDE_PANEL"
-
         private const val PREFS = "floating_panel_settings"
         private const val KEY_X = "panel_x"
         private const val KEY_Y = "panel_y"
@@ -42,8 +41,7 @@ class FloatingWindowService : Service() {
     private val analysisReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action != "com.otc.candleai.ANALYSIS_UPDATE") return
-            if (!intent.hasExtra("signal")) return
-            if (floatingView == null) return
+            if (!intent.hasExtra("signal") || floatingView == null) return
 
             val signal = intent.getStringExtra("signal") ?: "WAIT"
             val confidence = intent.getIntExtra("confidence", 0)
@@ -68,20 +66,16 @@ class FloatingWindowService : Service() {
         flags: Int,
         startId: Int
     ): Int {
-
         if (!Settings.canDrawOverlays(this)) {
             stopSelf()
             return START_NOT_STICKY
         }
 
-        windowManager =
-            getSystemService(WINDOW_SERVICE) as WindowManager
-
+        windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         registerAnalysisReceiver()
 
         when (intent?.action) {
             ACTION_HIDE -> hidePanel()
-            ACTION_SHOW -> showPanel()
             else -> showPanel()
         }
 
@@ -91,9 +85,7 @@ class FloatingWindowService : Service() {
     private fun registerAnalysisReceiver() {
         if (receiverRegistered) return
 
-        val filter = IntentFilter().apply {
-            addAction("com.otc.candleai.ANALYSIS_UPDATE")
-        }
+        val filter = IntentFilter("com.otc.candleai.ANALYSIS_UPDATE")
 
         if (Build.VERSION.SDK_INT >= 33) {
             registerReceiver(
@@ -112,16 +104,12 @@ class FloatingWindowService : Service() {
     private fun showPanel() {
         if (floatingView != null) return
 
-        val density = resources.displayMetrics.density
+        val d = resources.displayMetrics.density
+        fun dp(value: Int) = (value * d).toInt()
 
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(
-                (10 * density).toInt(),
-                (6 * density).toInt(),
-                (10 * density).toInt(),
-                (6 * density).toInt()
-            )
+            setPadding(dp(7), dp(3), dp(7), dp(3))
             setBackgroundColor(Color.rgb(25, 25, 25))
         }
 
@@ -132,52 +120,45 @@ class FloatingWindowService : Service() {
 
         val title = TextView(this).apply {
             text = "OTC CANDLE AI"
-            textSize = 12f
+            textSize = 10f
             setTextColor(Color.WHITE)
-            setPadding(0, 3, 8, 3)
+            setPadding(0, dp(4), dp(5), dp(4))
         }
 
         val hideButton = TextView(this).apply {
-            text = " × "
-            textSize = 18f
+            text = "×"
+            textSize = 17f
             setTextColor(Color.WHITE)
-            setPadding(5, 2, 5, 2)
-            setOnClickListener {
-                hidePanel()
-            }
+            setPadding(dp(7), dp(2), dp(5), dp(2))
+            setOnClickListener { hidePanel() }
         }
 
         header.addView(
             title,
-            LinearLayout.LayoutParams(
-                0,
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                1f
-            )
+            LinearLayout.LayoutParams(0, -2, 1f)
         )
-
         header.addView(hideButton)
 
         signalView = TextView(this).apply {
             text = "WAIT"
-            textSize = 19f
+            textSize = 16f
             setTextColor(Color.YELLOW)
-            setPadding(0, 4, 0, 2)
+            setPadding(0, dp(2), 0, 0)
         }
 
         confidenceView = TextView(this).apply {
             text = "Score: --"
-            textSize = 11f
+            textSize = 10f
             setTextColor(Color.WHITE)
-            setPadding(0, 0, 0, 3)
+            setPadding(0, 0, 0, dp(2))
         }
 
         infoView = TextView(this).apply {
             text = "Waiting for analysis"
-            textSize = 10f
+            textSize = 9f
             setTextColor(Color.WHITE)
-            maxLines = 100
-            setPadding(0, 2, 2, 4)
+            maxLines = 5
+            setPadding(0, dp(2), 0, dp(2))
         }
 
         val scrollView = ScrollView(this).apply {
@@ -189,50 +170,37 @@ class FloatingWindowService : Service() {
         panel.addView(header)
         panel.addView(signalView)
         panel.addView(confidenceView)
-
-        val scrollHeight = (110 * density).toInt()
-
         panel.addView(
             scrollView,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                scrollHeight
-            )
+            LinearLayout.LayoutParams(-1, dp(48))
         )
 
         val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
 
         val params = WindowManager.LayoutParams(
-            (210 * density).toInt(),
+            dp(155),
             WindowManager.LayoutParams.WRAP_CONTENT,
-            if (Build.VERSION.SDK_INT >= 26) {
+            if (Build.VERSION.SDK_INT >= 26)
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-            } else {
-                WindowManager.LayoutParams.TYPE_PHONE
-            },
+            else
+                WindowManager.LayoutParams.TYPE_PHONE,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = prefs.getInt(KEY_X, 20)
-            y = prefs.getInt(KEY_Y, 200)
+            x = prefs.getInt(KEY_X, dp(10))
+            y = prefs.getInt(KEY_Y, dp(150))
         }
 
-        title.setOnTouchListener(object : View.OnTouchListener {
-
+        header.setOnTouchListener(object : View.OnTouchListener {
             private var startX = 0
             private var startY = 0
             private var touchX = 0f
             private var touchY = 0f
             private var dragging = false
 
-            override fun onTouch(
-                view: View,
-                event: MotionEvent
-            ): Boolean {
-
+            override fun onTouch(view: View, event: MotionEvent): Boolean {
                 when (event.action) {
-
                     MotionEvent.ACTION_DOWN -> {
                         startX = params.x
                         startY = params.y
@@ -246,47 +214,37 @@ class FloatingWindowService : Service() {
                         val dx = (event.rawX - touchX).toInt()
                         val dy = (event.rawY - touchY).toInt()
 
-                        if (abs(dx) > 4 || abs(dy) > 4) {
-                            dragging = true
-                        }
+                        if (abs(dx) > 3 || abs(dy) > 3) dragging = true
 
-                        val screenWidth =
-                            resources.displayMetrics.widthPixels
-                        val screenHeight =
-                            resources.displayMetrics.heightPixels
+                        val screenW = resources.displayMetrics.widthPixels
+                        val screenH = resources.displayMetrics.heightPixels
 
                         params.x = (startX + dx).coerceIn(
-                            0,
-                            (screenWidth - panel.width).coerceAtLeast(0)
+                            0, (screenW - panel.width).coerceAtLeast(0)
                         )
-
                         params.y = (startY + dy).coerceIn(
-                            0,
-                            (screenHeight - panel.height).coerceAtLeast(0)
+                            0, (screenH - panel.height).coerceAtLeast(0)
                         )
 
                         try {
                             windowManager.updateViewLayout(panel, params)
                         } catch (e: Exception) {
-                            android.util.Log.e(
-                                "FloatingWindowService",
-                                "Move failed",
-                                e
-                            )
+                            android.util.Log.e("FloatingWindowService", "Move failed", e)
                         }
-
                         return true
                     }
 
-                    MotionEvent.ACTION_UP,
-                    MotionEvent.ACTION_CANCEL -> {
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                         if (dragging) {
-                            savePosition(params)
+                            getSharedPreferences(PREFS, MODE_PRIVATE)
+                                .edit()
+                                .putInt(KEY_X, params.x)
+                                .putInt(KEY_Y, params.y)
+                                .apply()
                         }
                         return true
                     }
                 }
-
                 return true
             }
         })
@@ -296,37 +254,18 @@ class FloatingWindowService : Service() {
             floatingView = panel
         } catch (e: Exception) {
             floatingView = null
-            android.util.Log.e(
-                "FloatingWindowService",
-                "Panel could not be displayed",
-                e
-            )
+            android.util.Log.e("FloatingWindowService", "Panel display failed", e)
         }
-    }
-
-    private fun savePosition(
-        params: WindowManager.LayoutParams
-    ) {
-        getSharedPreferences(PREFS, MODE_PRIVATE)
-            .edit()
-            .putInt(KEY_X, params.x)
-            .putInt(KEY_Y, params.y)
-            .apply()
     }
 
     private fun hidePanel() {
-        floatingView?.let { view ->
+        floatingView?.let {
             try {
-                windowManager.removeView(view)
+                windowManager.removeView(it)
             } catch (e: Exception) {
-                android.util.Log.e(
-                    "FloatingWindowService",
-                    "Panel hide failed",
-                    e
-                )
+                android.util.Log.e("FloatingWindowService", "Hide failed", e)
             }
         }
-
         floatingView = null
     }
 
@@ -336,10 +275,8 @@ class FloatingWindowService : Service() {
                 unregisterReceiver(analysisReceiver)
             } catch (_: Exception) {
             }
-
             receiverRegistered = false
         }
-
         hidePanel()
         super.onDestroy()
     }
