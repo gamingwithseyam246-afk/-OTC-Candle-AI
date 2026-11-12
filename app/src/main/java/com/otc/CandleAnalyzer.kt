@@ -416,163 +416,125 @@ object CandleAnalyzer {
         return "None"
     }
 
-    private fun detectCandles(
-        bitmap: Bitmap
-    ): List<Bar> {
+    private fun detectCandles(bitmap: Bitmap): List<Bar> {
 
-        if (bitmap.width < 100 || bitmap.height < 100) {
-            return emptyList()
-        }
-
-        val left = (bitmap.width * 0.00f).toInt()
-        val right = (bitmap.width * 0.57f).toInt()
-        val top = (bitmap.height * 0.12f).toInt()
-        val bottom = (bitmap.height * 0.69f).toInt()
-
-        val width = right - left
-        val height = bottom - top
-
-        if (width <= 0 || height <= 0) {
-            return emptyList()
-        }
-
-        val types = IntArray(width)
-
-        for (x in 0 until width) {
-            var green = 0
-            var red = 0
-
-            for (y in 0 until height) {
-                when (
-                    colorType(
-                        bitmap.getPixel(left + x, top + y)
-                    )
-                ) {
-                    1 -> green++
-                    2 -> red++
-                }
-            }
-
-            types[x] = when {
-                green >= 3 && green > red * 1.3 -> 1
-                red >= 3 && red > green * 1.3 -> 2
-                else -> 0
-            }
-        }
-
-        val result = mutableListOf<Bar>()
-        var x = 0
-
-        while (x < width) {
-
-            val type = types[x]
-
-            if (type == 0) {
-                x++
-                continue
-            }
-
-            val start = x
-            var end = x
-            x++
-
-            while (x < width) {
-                if (types[x] == type) {
-                    end = x
-                    x++
-                } else if (
-                    x + 1 < width &&
-                    types[x] == 0 &&
-                    types[x + 1] == type
-                ) {
-                    end = x + 1
-                    x += 2
-                } else {
-                    break
-                }
-            }
-
-            val candleWidth = end - start + 1
-
-            if (candleWidth > 25) continue
-
-            val rows = IntArray(height)
-            var minY = height
-            var maxY = -1
-
-            for (cx in start..end) {
-                for (cy in 0 until height) {
-
-                    if (
-                        colorType(
-                            bitmap.getPixel(left + cx, top + cy)
-                        ) == type
-                    ) {
-                        rows[cy]++
-                        minY = minOf(minY, cy)
-                        maxY = maxOf(maxY, cy)
-                    }
-                }
-            }
-
-            if (maxY < minY) continue
-
-            val peak = rows.maxOrNull() ?: 0
-            if (peak < 1) continue
-
-            val threshold = maxOf(
-                1,
-                (peak * 0.40f).toInt()
-            )
-
-            val peakY = rows.indices.maxByOrNull {
-                rows[it]
-            } ?: continue
-
-            var bodyTop = peakY
-            var bodyBottom = peakY
-
-            while (
-                bodyTop > minY &&
-                rows[bodyTop - 1] >= threshold
-            ) {
-                bodyTop--
-            }
-
-            while (
-                bodyBottom < maxY &&
-                rows[bodyBottom + 1] >= threshold
-            ) {
-                bodyBottom++
-            }
-
-            val body = bodyBottom - bodyTop + 1
-            val upperWick = bodyTop - minY
-            val lowerWick = maxY - bodyBottom
-            val totalHeight = maxY - minY + 1
-
-            if (totalHeight < 6 || body < 1) continue
-
-            result.add(
-                Bar(
-                    bullish = type == 1,
-                    body = body,
-                    upperWick = upperWick,
-                    lowerWick = lowerWick,
-                    centerX = left + (start + end) / 2,
-                    closeY = if (type == 1) {
-                        bodyTop + top
-                    } else {
-                        bodyBottom + top
-                    },
-                    topY = minY + top,
-                    bottomY = maxY + top,
-                    bodyTop = bodyTop + top,
-                    bodyBottom = bodyBottom + top
-                )
-            )
-        }
-
-        return result.sortedBy { it.centerX }
+    if (bitmap.width < 100 || bitmap.height < 100) {
+        return emptyList()
     }
+
+    // চার্টের বেশি অংশ স্ক্যান করা হবে
+    val left = (bitmap.width * 0.00f).toInt()
+    val right = (bitmap.width * 0.95f).toInt()
+    val top = (bitmap.height * 0.12f).toInt()
+    val bottom = (bitmap.height * 0.69f).toInt()
+
+    val width = right - left
+    val height = bottom - top
+
+    if (width <= 0 || height <= 0) return emptyList()
+
+    val types = IntArray(width)
+
+    for (x in 0 until width) {
+        var green = 0
+        var red = 0
+
+        for (y in 0 until height) {
+            when (colorType(bitmap.getPixel(left + x, top + y))) {
+                1 -> green++
+                2 -> red++
+            }
+        }
+
+        types[x] = when {
+            green >= 3 && green > red * 1.3 -> 1
+            red >= 3 && red > green * 1.3 -> 2
+            else -> 0
+        }
+    }
+
+    val result = mutableListOf<Bar>()
+    var x = 0
+
+    while (x < width) {
+
+        val type = types[x]
+
+        if (type == 0) {
+            x++
+            continue
+        }
+
+        val start = x
+        var end = x
+        x++
+
+        // পাশের ক্যান্ডেলের ফাঁক জোড়া দেওয়া হবে না
+        while (x < width && types[x] == type) {
+            end = x
+            x++
+        }
+
+        val candleWidth = end - start + 1
+
+        if (candleWidth > 25) continue
+
+        val rows = IntArray(height)
+        var minY = height
+        var maxY = -1
+
+        for (cx in start..end) {
+            for (cy in 0 until height) {
+                if (colorType(bitmap.getPixel(left + cx, top + cy)) == type) {
+                    rows[cy]++
+                    minY = minOf(minY, cy)
+                    maxY = maxOf(maxY, cy)
+                }
+            }
+        }
+
+        if (maxY < minY) continue
+
+        val peak = rows.maxOrNull() ?: 0
+        if (peak < 1) continue
+
+        val threshold = maxOf(1, (peak * 0.40f).toInt())
+
+        val peakY = rows.indices.maxByOrNull { rows[it] } ?: continue
+
+        var bodyTop = peakY
+        var bodyBottom = peakY
+
+        while (bodyTop > minY && rows[bodyTop - 1] >= threshold) {
+            bodyTop--
+        }
+
+        while (bodyBottom < maxY && rows[bodyBottom + 1] >= threshold) {
+            bodyBottom++
+        }
+
+        val body = bodyBottom - bodyTop + 1
+        val upperWick = bodyTop - minY
+        val lowerWick = maxY - bodyBottom
+        val totalHeight = maxY - minY + 1
+
+        if (totalHeight < 6 || body < 1) continue
+
+        result.add(
+            Bar(
+                bullish = type == 1,
+                body = body,
+                upperWick = upperWick,
+                lowerWick = lowerWick,
+                centerX = left + (start + end) / 2,
+                closeY = if (type == 1) bodyTop + top else bodyBottom + top,
+                topY = minY + top,
+                bottomY = maxY + top,
+                bodyTop = bodyTop + top,
+                bodyBottom = bodyBottom + top
+            )
+        )
+    }
+
+    return result.sortedBy { it.centerX }
 }
