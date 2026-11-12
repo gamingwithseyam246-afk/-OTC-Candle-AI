@@ -136,7 +136,9 @@ class FloatingWindowService : Service() {
             textSize = 22f
             setTextColor(Color.WHITE)
             setPadding(8, 4, 8, 4)
-            setOnClickListener { hidePanel() }
+            setOnClickListener {
+                hidePanel()
+            }
         }
 
         header.addView(
@@ -168,31 +170,30 @@ class FloatingWindowService : Service() {
             text = "Waiting for analysis"
             textSize = 12f
             setTextColor(Color.WHITE)
-            maxLines = 30
+            maxLines = 100
             setPadding(0, 4, 4, 8)
         }
 
         val scrollView = ScrollView(this).apply {
             isFillViewport = false
             overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
-            addView(
-                infoView,
-                ScrollView.LayoutParams(
-                    ScrollView.LayoutParams.MATCH_PARENT,
-                    ScrollView.LayoutParams.WRAP_CONTENT
-                )
-            )
+
+            // ScrollView-এর child সরাসরি যোগ করা হচ্ছে।
+            // এতে আগের LayoutParams compilation error হবে না।
+            addView(infoView)
         }
 
         panel.addView(header)
         panel.addView(signalView)
         panel.addView(confidenceView)
 
+        val scrollHeight = (260 * resources.displayMetrics.density).toInt()
+
         panel.addView(
             scrollView,
             LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                260
+                scrollHeight
             )
         )
 
@@ -201,10 +202,11 @@ class FloatingWindowService : Service() {
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
-            if (Build.VERSION.SDK_INT >= 26)
+            if (Build.VERSION.SDK_INT >= 26) {
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-            else
-                WindowManager.LayoutParams.TYPE_PHONE,
+            } else {
+                WindowManager.LayoutParams.TYPE_PHONE
+            },
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
             PixelFormat.TRANSLUCENT
         ).apply {
@@ -213,6 +215,7 @@ class FloatingWindowService : Service() {
             y = prefs.getInt(KEY_Y, 200)
         }
 
+        // শুধু Header ধরে প্যানেল সরানো যাবে।
         title.setOnTouchListener(object : View.OnTouchListener {
 
             private var startX = 0
@@ -265,7 +268,9 @@ class FloatingWindowService : Service() {
                     }
 
                     MotionEvent.ACTION_UP -> {
-                        if (dragging) savePosition(params)
+                        if (dragging) {
+                            savePosition(params)
+                        }
                         return true
                     }
                 }
