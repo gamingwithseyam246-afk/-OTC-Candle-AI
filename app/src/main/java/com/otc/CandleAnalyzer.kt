@@ -18,15 +18,6 @@ data class CandleSignal(
 
 object CandleAnalyzer {
 
-    private data class Component(
-        val type: Int,
-        var left: Int,
-        var right: Int,
-        var top: Int,
-        var bottom: Int,
-        var area: Int
-    )
-
     private data class Bar(
         val bullish: Boolean,
         val open: Double,
@@ -50,6 +41,12 @@ object CandleAnalyzer {
     private data class Pattern(
         val name: String,
         val score: Int
+    )
+
+    private data class CandleColumn(
+        val type: Int,
+        val left: Int,
+        val right: Int
     )
 
     fun analyze(bitmap: Bitmap): CandleSignal {
@@ -77,7 +74,8 @@ object CandleAnalyzer {
             )
         }
 
-        // The rightmost candle is treated as the currently forming candle.
+        // Last detected candle is treated as the live candle.
+        val live = bars.last()
         val complete = bars.dropLast(1)
 
         if (complete.size < 8) {
@@ -121,7 +119,8 @@ object CandleAnalyzer {
             .coerceAtLeast(1.0)
 
         val trendBars = complete.takeLast(8)
-        val trendMove = trendBars.last().close - trendBars.first().close
+        val trendMove =
+            trendBars.last().close - trendBars.first().close
 
         val upwardCloses = trendBars
             .zipWithNext()
@@ -134,10 +133,15 @@ object CandleAnalyzer {
         val trend = when {
             bullishStructure -> "BULLISH"
             bearishStructure -> "BEARISH"
+
             trendMove >= averageRange * 1.2 &&
-                upwardCloses > downwardCloses -> "POSSIBLE BULLISH"
+                upwardCloses > downwardCloses ->
+                "POSSIBLE BULLISH"
+
             trendMove <= -averageRange * 1.2 &&
-                downwardCloses > upwardCloses -> "POSSIBLE BEARISH"
+                downwardCloses > upwardCloses ->
+                "POSSIBLE BEARISH"
+
             else -> "SIDEWAYS"
         }
 
@@ -153,10 +157,10 @@ object CandleAnalyzer {
             previous.close >= support
 
         val nearSupport = support != null &&
-            abs(last.low - support) <= averageRange * 2
+            abs(last.low - support) <= averageRange * 1.5
 
         val nearResistance = resistance != null &&
-            abs(last.high - resistance) <= averageRange * 2
+            abs(last.high - resistance) <= averageRange * 1.5
 
         val bullishSweep = support != null &&
             last.low < support &&
@@ -168,13 +172,13 @@ object CandleAnalyzer {
 
         val bullishWick =
             last.lowerWick >= last.body * 1.5 &&
-            last.lowerWick > last.upperWick &&
-            nearSupport
+                last.lowerWick > last.upperWick &&
+                nearSupport
 
         val bearishWick =
             last.upperWick >= last.body * 1.5 &&
-            last.upperWick > last.lowerWick &&
-            nearResistance
+                last.upperWick > last.lowerWick &&
+                nearResistance
 
         val pattern = detectPattern(previous, last)
 
@@ -271,12 +275,50 @@ object CandleAnalyzer {
             score = (score * 0.60).roundToInt()
         }
 
-        val confidence = (abs(score) * 3).coerceIn(0, 85)
+        val bullishConfirmations = listOf(
+            bullishStructure,
+            trend == "BULLISH" ||
+                trend == "POSSIBLE BULLISH",
+            bullishBOS,
+            bullishSweep,
+            bullishWick,
+            ema20Ready && ema9 > ema20,
+            greenMomentum >= 4,
+            pattern.score > 0
+        ).count { it }
 
+        val bearishConfirmations = listOf(
+            bearishStructure,
+            trend == "BEARISH" ||
+                trend == "POSSIBLE BEARISH",
+            bearishBOS,
+            bearishSweep,
+            bearishWick,
+            ema20Ready && ema9 < ema20,
+            redMomentum >= 4,
+            pattern.score < 0
+        ).count { it }
+
+        // This is a technical strength score, NOT a win probability.
+        val confidence =
+            (abs(score) * 3).coerceIn(0, 85)
+
+        // Strict entry filter: weak or conflicting evidence means WAIT.
         val signal = when {
             conflict -> "WAIT"
-            score >= 10 && confidence >= 30 -> "UP"
-            score <= -10 && confidence >= 30 -> "DOWN"
+
+            score >= 20 &&
+                confidence >= 60 &&
+                bullishConfirmations >= 3 &&
+                bullishConfirmations > bearishConfirmations ->
+                "UP"
+
+            score <= -20 &&
+                confidence >= 60 &&
+                bearishConfirmations >= 3 &&
+                bearishConfirmations > bullishConfirmations ->
+                "DOWN"
+
             else -> "WAIT"
         }
 
@@ -317,8 +359,14 @@ object CandleAnalyzer {
             else -> "NONE"
         }
 
+        val liveDirection = when {
+            live.bullish -> "UP FORMING"
+            else -> "DOWN FORMING"
+        }
+
         val message = buildString {
             append("NEXT: $signal | SCORE: $confidence%")
+            append(" | CURRENT: $liveDirection")
             append(" | TREND: $trend")
             append(" | STRUCTURE: $structure")
             append(" | $bos")
@@ -333,6 +381,7 @@ object CandleAnalyzer {
             append(" | COMPLETE: ${complete.size}")
             append(" | DETECTED: ${bars.size}")
             append(" | MOMENTUM: $greenMomentum/$redMomentum")
+            append(" | CONFIRM: $bullishConfirmations/$bearishConfirmations")
             append(" | CONFLICT: $conflict")
         }
 
@@ -375,229 +424,192 @@ object CandleAnalyzer {
         if (w < 20 || h < 20) return emptyList()
 
         val types = ByteArray(w * h)
+        val columnCounts = Array(3) { IntArray(w) }
 
         for (y in 0 until h) {
             for (x in 0 until w) {
-                types[y * w + x] =
-                    colorType(bitmap.getPixel(left + x, top + y)).toByte()
-            }
-        }
 
-        val visited = BooleanArray(w * h)
-        val queue = IntArray(w * h)
-        val components = mutableListOf<Component>()
-
-        for (start in types.indices) {
-
-            val type = types[start].toInt()
-            if (type == 0 || visited[start]) continue
-
-            var head = 0
-            var tail = 0
-
-            queue[tail++] = start
-            visited[start] = true
-
-            var minX = w
-            var maxX = -1
-            var minY = h
-            var maxY = -1
-            var area = 0
-
-            while (head < tail) {
-
-                val position = queue[head++]
-                val x = position % w
-                val y = position / w
-
-                minX = min(minX, x)
-                maxX = max(maxX, x)
-                minY = min(minY, y)
-                maxY = max(maxY, y)
-                area++
-
-                val directions = arrayOf(
-                    intArrayOf(0, -1),
-                    intArrayOf(0, 1),
-                    intArrayOf(-1, 0),
-                    intArrayOf(1, 0)
+                val type = colorType(
+                    bitmap.getPixel(left + x, top + y)
                 )
 
-                for (direction in directions) {
+                types[y * w + x] = type.toByte()
 
-                    val nx = x + direction[0]
-                    val ny = y + direction[1]
-
-                    if (nx !in 0 until w || ny !in 0 until h) continue
-
-                    val next = ny * w + nx
-
-                    if (!visited[next] && types[next].toInt() == type) {
-                        visited[next] = true
-                        queue[tail++] = next
-                    }
-                }
-            }
-
-            val componentWidth = maxX - minX + 1
-            val componentHeight = maxY - minY + 1
-
-            if (
-                componentWidth > 22 ||
-                componentHeight < 3 ||
-                area < 3
-            ) continue
-
-            components.add(
-                Component(
-                    type,
-                    minX,
-                    maxX,
-                    minY,
-                    maxY,
-                    area
-                )
-            )
-        }
-
-        // Merge separated body and wick pixels of the same candle.
-        var changed = true
-
-        while (changed) {
-
-            changed = false
-
-            outer@ for (i in components.indices) {
-                for (j in i + 1 until components.size) {
-
-                    val a = components[i]
-                    val b = components[j]
-
-                    if (a.type != b.type) continue
-
-                    val overlap =
-                        min(a.right, b.right) -
-                            max(a.left, b.left) + 1
-
-                    val verticalGap = max(
-                        0,
-                        max(a.top, b.top) -
-                            min(a.bottom, b.bottom) - 1
-                    )
-
-                    if (overlap >= 1 && verticalGap <= 4) {
-
-                        val newLeft = min(a.left, b.left)
-                        val newRight = max(a.right, b.right)
-                        val newTop = min(a.top, b.top)
-                        val newBottom = max(a.bottom, b.bottom)
-
-                        if (newRight - newLeft + 1 <= 22) {
-
-                            a.left = newLeft
-                            a.right = newRight
-                            a.top = newTop
-                            a.bottom = newBottom
-                            a.area += b.area
-
-                            components.removeAt(j)
-                            changed = true
-                            break@outer
-                        }
-                    }
+                if (type != 0) {
+                    columnCounts[type][x]++
                 }
             }
         }
 
         val result = mutableListOf<Bar>()
 
-        for (component in components) {
+        // Detect red and green candles independently.
+        for (type in 1..2) {
 
-            val cw = component.right - component.left + 1
-            val ch = component.bottom - component.top + 1
+            val active = BooleanArray(w)
 
-            if (cw !in 1..22 || ch < 3) continue
+            for (x in 0 until w) {
+                // A candle body normally creates multiple colored pixels
+                // in at least one vertical image column.
+                active[x] = columnCounts[type][x] >= 2
+            }
 
-            val rows = IntArray(ch)
+            val groups = mutableListOf<CandleColumn>()
 
-            for (x in component.left..component.right) {
-                for (y in component.top..component.bottom) {
+            var x = 0
 
-                    val type = types[y * w + x].toInt()
+            while (x < w) {
 
-                    if (type == component.type) {
-                        rows[y - component.top]++
+                if (!active[x]) {
+                    x++
+                    continue
+                }
+
+                val start = x
+                var end = x
+
+                while (end + 1 < w && active[end + 1]) {
+                    end++
+                }
+
+                // Include a single thin neighboring column for a wick.
+                var groupLeft = start
+                var groupRight = end
+
+                if (
+                    groupLeft > 0 &&
+                    columnCounts[type][groupLeft - 1] == 1
+                ) {
+                    groupLeft--
+                }
+
+                if (
+                    groupRight + 1 < w &&
+                    columnCounts[type][groupRight + 1] == 1
+                ) {
+                    groupRight++
+                }
+
+                val groupWidth = groupRight - groupLeft + 1
+
+                if (groupWidth in 1..22) {
+                    groups.add(
+                        CandleColumn(
+                            type,
+                            groupLeft,
+                            groupRight
+                        )
+                    )
+                }
+
+                x = end + 1
+            }
+
+            for (group in groups) {
+
+                val pixelRows = IntArray(h)
+                var totalPixels = 0
+                var minY = h
+                var maxY = -1
+
+                for (gx in group.left..group.right) {
+                    for (gy in 0 until h) {
+
+                        if (types[gy * w + gx].toInt() == type) {
+                            pixelRows[gy]++
+                            totalPixels++
+
+                            minY = min(minY, gy)
+                            maxY = max(maxY, gy)
+                        }
                     }
                 }
-            }
 
-            val peak = rows.maxOrNull() ?: 0
-            if (peak < 1) continue
+                if (maxY < 0 || totalPixels < 4) continue
 
-            val peakY = rows.indices.maxByOrNull {
-                rows[it]
-            } ?: continue
+                val candleHeight = maxY - minY + 1
+                if (candleHeight < 4) continue
 
-            val threshold = max(
-                1,
-                (peak * 0.55).roundToInt()
-            )
-
-            var bodyTop = peakY
-            var bodyBottom = peakY
-
-            while (
-                bodyTop > 0 &&
-                rows[bodyTop - 1] >= threshold
-            ) {
-                bodyTop--
-            }
-
-            while (
-                bodyBottom < ch - 1 &&
-                rows[bodyBottom + 1] >= threshold
-            ) {
-                bodyBottom++
-            }
-
-            val bullish = component.type == 1
-
-            val absoluteTop = component.top + top
-            val absoluteBottom = component.bottom + top
-
-            val open: Double
-            val close: Double
-
-            if (bullish) {
-                open = -(component.top + bodyBottom + top).toDouble()
-                close = -(component.top + bodyTop + top).toDouble()
-            } else {
-                open = -(component.top + bodyTop + top).toDouble()
-                close = -(component.top + bodyBottom + top).toDouble()
-            }
-
-            val body = max(
-                1,
-                bodyBottom - bodyTop + 1
-            ).toDouble()
-
-            val upperWick = bodyTop.toDouble()
-            val lowerWick = max(0, ch - 1 - bodyBottom).toDouble()
-
-            result.add(
-                Bar(
-                    bullish = bullish,
-                    open = open,
-                    close = close,
-                    high = -absoluteTop.toDouble(),
-                    low = -absoluteBottom.toDouble(),
-                    body = body,
-                    upperWick = upperWick,
-                    lowerWick = lowerWick,
-                    centerX = left +
-                        (component.left + component.right) / 2
+                val rows = pixelRows.copyOfRange(
+                    minY,
+                    maxY + 1
                 )
-            )
+
+                val peak = rows.maxOrNull() ?: 0
+                if (peak < 1) continue
+
+                val peakY = rows.indices.maxByOrNull {
+                    rows[it]
+                } ?: continue
+
+                // Dense rows approximate the candle body.
+                val threshold = max(
+                    1,
+                    (peak * 0.50).roundToInt()
+                )
+
+                var bodyTop = peakY
+                var bodyBottom = peakY
+
+                while (
+                    bodyTop > 0 &&
+                    rows[bodyTop - 1] >= threshold
+                ) {
+                    bodyTop--
+                }
+
+                while (
+                    bodyBottom < rows.lastIndex &&
+                    rows[bodyBottom + 1] >= threshold
+                ) {
+                    bodyBottom++
+                }
+
+                val bodyHeight = bodyBottom - bodyTop + 1
+                if (bodyHeight < 2) continue
+
+                val bullish = type == 1
+
+                val absoluteBodyTop = minY + bodyTop + top
+                val absoluteBodyBottom = minY + bodyBottom + top
+
+                val absoluteHigh = minY + top
+                val absoluteLow = maxY + top
+
+                val open: Double
+                val close: Double
+
+                if (bullish) {
+                    open = -absoluteBodyBottom.toDouble()
+                    close = -absoluteBodyTop.toDouble()
+                } else {
+                    open = -absoluteBodyTop.toDouble()
+                    close = -absoluteBodyBottom.toDouble()
+                }
+
+                val body = bodyHeight.toDouble()
+
+                val upperWick =
+                    max(0, absoluteBodyTop - absoluteHigh).toDouble()
+
+                val lowerWick =
+                    max(0, absoluteLow - absoluteBodyBottom).toDouble()
+
+                result.add(
+                    Bar(
+                        bullish = bullish,
+                        open = open,
+                        close = close,
+                        high = -absoluteHigh.toDouble(),
+                        low = -absoluteLow.toDouble(),
+                        body = body,
+                        upperWick = upperWick,
+                        lowerWick = lowerWick,
+                        centerX = left +
+                            (group.left + group.right) / 2
+                    )
+                )
+            }
         }
 
         val sorted = result.sortedBy { it.centerX }
@@ -609,7 +621,8 @@ object CandleAnalyzer {
 
             if (
                 previous != null &&
-                abs(previous.centerX - bar.centerX) <= 1
+                abs(previous.centerX - bar.centerX) <= 1 &&
+                previous.bullish == bar.bullish
             ) {
                 if (bar.range > previous.range) {
                     unique[unique.lastIndex] = bar
