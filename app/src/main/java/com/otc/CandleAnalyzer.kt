@@ -52,8 +52,9 @@ object CandleAnalyzer {
             )
         }
 
-        // Rightmost detected candle is provisionally treated as live.
+        // শেষ candle-টি live ধরে বাদ দেওয়া হচ্ছে।
         val complete = bars.dropLast(1)
+
         if (complete.size < 11) {
             val green = complete.count { it.bullish }
             return result(
@@ -87,14 +88,16 @@ object CandleAnalyzer {
         val bearishStructure = lh && ll
 
         val trendMove = recent.last().close - recent.first().close
-        val upCloses = recent.zipWithNext().count { it.second.close > it.first.close }
-        val downCloses = recent.zipWithNext().count { it.second.close < it.first.close }
+        val upCloses = recent.zipWithNext()
+            .count { it.second.close > it.first.close }
+        val downCloses = recent.zipWithNext()
+            .count { it.second.close < it.first.close }
 
         val trend = when {
             bullishStructure -> "UPTREND"
             bearishStructure -> "DOWNTREND"
-            trendMove > averageRange * 1.0 && upCloses >= 5 -> "POSSIBLE UPTREND"
-            trendMove < -averageRange * 1.0 && downCloses >= 5 -> "POSSIBLE DOWNTREND"
+            trendMove > averageRange && upCloses >= 5 -> "POSSIBLE UPTREND"
+            trendMove < -averageRange && downCloses >= 5 -> "POSSIBLE DOWNTREND"
             else -> "SIDEWAYS"
         }
 
@@ -103,16 +106,19 @@ object CandleAnalyzer {
 
         val bullishBOS = resistance != null &&
             last.close > resistance && previous.close <= resistance
+
         val bearishBOS = support != null &&
             last.close < support && previous.close >= support
 
         val bullishSweep = support != null &&
             last.low < support && last.close > support
+
         val bearishSweep = resistance != null &&
             last.high > resistance && last.close < resistance
 
         val nearSupport = support != null &&
             abs(last.low - support) <= averageRange * 1.0
+
         val nearResistance = resistance != null &&
             abs(last.high - resistance) <= averageRange * 1.0
 
@@ -124,12 +130,15 @@ object CandleAnalyzer {
 
         val pattern = detectPattern(previous, last)
 
-        // Momentum uses candle direction AND closing-price movement.
         val greenMomentum = recent.count { it.bullish }
         val redMomentum = recent.size - greenMomentum
-        val bullishMomentum = greenMomentum >= 5 && upCloses >= 4 &&
+
+        val bullishMomentum = greenMomentum >= 5 &&
+            upCloses >= 4 &&
             recent.last().close > recent.first().close
-        val bearishMomentum = redMomentum >= 5 && downCloses >= 4 &&
+
+        val bearishMomentum = redMomentum >= 5 &&
+            downCloses >= 4 &&
             recent.last().close < recent.first().close
 
         val closes = complete.map { it.close }
@@ -144,36 +153,36 @@ object CandleAnalyzer {
         val longEmaBearish = complete.size >= 50 && ema20 < ema50
 
         val bullishFvg = complete.size >= 3 &&
-            complete.last().low > complete[complete.lastIndex - 2].high
-        val bearishFvg = complete.size >= 3 &&
-            complete.last().high < complete[complete.lastIndex - 2].low
+            last.low > complete[complete.lastIndex - 2].high
 
-        // Confirmation groups avoid counting correlated evidence twice.
+        val bearishFvg = complete.size >= 3 &&
+            last.high < complete[complete.lastIndex - 2].low
+
         val bullishTrendGroup = bullishStructure ||
             trend == "UPTREND" || trend == "POSSIBLE UPTREND"
+
         val bearishTrendGroup = bearishStructure ||
             trend == "DOWNTREND" || trend == "POSSIBLE DOWNTREND"
 
         val bullishTrigger = bullishBOS || bullishSweep ||
             bullishWick || pattern.score >= 3
+
         val bearishTrigger = bearishBOS || bearishSweep ||
             bearishWick || pattern.score <= -3
 
-        val bullishMomentumGroup = bullishMomentum
-        val bearishMomentumGroup = bearishMomentum
+        val bullishRsi = rsi in 51.0..68.0
+        val bearishRsi = rsi in 32.0..49.0
 
         val bullishEmaGroup = emaBullish &&
             (!longEmaBearish || longEmaBullish)
+
         val bearishEmaGroup = emaBearish &&
             (!longEmaBullish || longEmaBearish)
-
-        val bullishRsi = rsi in 50.0..68.0
-        val bearishRsi = rsi in 32.0..50.0
 
         val bullishGroups = listOf(
             bullishTrendGroup,
             bullishTrigger,
-            bullishMomentumGroup,
+            bullishMomentum,
             bullishEmaGroup,
             bullishRsi
         ).count { it }
@@ -181,7 +190,7 @@ object CandleAnalyzer {
         val bearishGroups = listOf(
             bearishTrendGroup,
             bearishTrigger,
-            bearishMomentumGroup,
+            bearishMomentum,
             bearishEmaGroup,
             bearishRsi
         ).count { it }
@@ -194,61 +203,89 @@ object CandleAnalyzer {
             bullishBOS || bullishSweep || bullishWick ||
                 pattern.score >= 3 || bullishMomentum
 
-        val conflict = (bullishGroups >= 2 && strongBullishConflict) ||
+        val conflict =
+            (bullishGroups >= 2 && strongBullishConflict) ||
             (bearishGroups >= 2 && strongBearishConflict) ||
             (bullishGroups >= 2 && bearishGroups >= 2)
 
-        // Technical score is a strength indicator, not a win probability.
+        // Directional score: এটি probability নয়, evidence score।
         var score = 0
+
         if (bullishTrendGroup) score += 2
         if (bearishTrendGroup) score -= 2
+
         if (bullishBOS) score += 5
         if (bearishBOS) score -= 5
+
         if (bullishSweep) score += 4
         if (bearishSweep) score -= 4
-        if (bullishWick) score += 2
-        if (bearishWick) score -= 2
+
+        if (bullishWick) score += 3
+        if (bearishWick) score -= 3
+
         if (bullishMomentum) score += 4
         if (bearishMomentum) score -= 4
+
         if (emaBullish) score += 2
         if (emaBearish) score -= 2
+
         if (longEmaBullish) score += 1
         if (longEmaBearish) score -= 1
+
         if (bullishRsi) score += 1
         if (bearishRsi) score -= 1
+
         if (bullishFvg) score += 1
         if (bearishFvg) score -= 1
+
         score += pattern.score
 
-        // Avoid entries after an unusually large candle.
+        // Support-এ bearish এবং resistance-এ bullish signal সতর্কভাবে আটকানো।
+        val downBlockedBySupport =
+            nearSupport && !bearishBOS
+
+        val upBlockedByResistance =
+            nearResistance && !bullishBOS
+
+        // বড় candle বা দুর্বল body হলে নতুন signal নয়।
         val oversizedCandle = last.range > averageRange * 2.0
         val weakBody = last.bodyRatio < 0.20
 
         val signal = when {
             conflict -> "WAIT"
             oversizedCandle || weakBody -> "WAIT"
+            downBlockedBySupport && score < 0 -> "WAIT"
+            upBlockedByResistance && score > 0 -> "WAIT"
 
             score >= 10 &&
                 bullishGroups >= 3 &&
                 bullishGroups > bearishGroups &&
                 bullishTrigger &&
-                bullishMomentumGroup &&
-                !strongBullishConflict -> "UP"
+                bullishMomentum &&
+                !strongBullishConflict &&
+                !upBlockedByResistance -> "UP"
 
             score <= -10 &&
                 bearishGroups >= 3 &&
                 bearishGroups > bullishGroups &&
                 bearishTrigger &&
-                bearishMomentumGroup &&
-                !strongBearishConflict -> "DOWN"
+                bearishMomentum &&
+                !strongBearishConflict &&
+                !downBlockedBySupport -> "DOWN"
 
             else -> "WAIT"
         }
 
-        val confidence = when (signal) {
-            "UP", "DOWN" -> (abs(score) * 5 + bullishGroups.coerceAtLeast(bearishGroups) * 3)
-                .coerceIn(30, 85)
-            else -> 0
+        // Confidence score-এ direction agreement ও evidence margin দুটোই ধরা হচ্ছে।
+        val confidence = if (signal == "UP" || signal == "DOWN") {
+            val winningGroups = if (signal == "UP") bullishGroups else bearishGroups
+            val losingGroups = if (signal == "UP") bearishGroups else bullishGroups
+            val margin = (winningGroups - losingGroups).coerceAtLeast(0)
+
+            (abs(score) * 3 + winningGroups * 7 + margin * 4)
+                .coerceIn(35, 88)
+        } else {
+            0
         }
 
         val structure = when {
@@ -275,6 +312,12 @@ object CandleAnalyzer {
             else -> "NO STRONG REJECTION"
         }
 
+        val levelStatus = when {
+            nearSupport -> "NEAR SUPPORT"
+            nearResistance -> "NEAR RESISTANCE"
+            else -> "CLEAR"
+        }
+
         val emaDirection = when {
             complete.size < 20 -> "NOT READY"
             emaBullish -> "BULLISH"
@@ -283,7 +326,17 @@ object CandleAnalyzer {
         }
 
         val live = bars.last()
-        val liveDirection = if (live.bullish) "UP FORMING" else "DOWN FORMING"
+        val liveDirection =
+            if (live.bullish) "UP FORMING" else "DOWN FORMING"
+
+        val waitReason = when {
+            conflict -> "CONFLICT"
+            oversizedCandle -> "HIGH VOLATILITY"
+            weakBody -> "WEAK BODY"
+            downBlockedBySupport && score < 0 -> "SUPPORT BLOCK"
+            upBlockedByResistance && score > 0 -> "RESISTANCE BLOCK"
+            else -> "INSUFFICIENT CONFIRMATION"
+        }
 
         val message = buildString {
             append("NEXT: $signal | SCORE: $confidence")
@@ -291,6 +344,7 @@ object CandleAnalyzer {
             append(" | TREND: $trend")
             append(" | STRUCTURE: $structure")
             append(" | $bos | $sweep | $wick")
+            append(" | LEVEL: $levelStatus")
             append(" | PATTERN: ${pattern.name}")
             append(" | RSI: ${rsi.roundToInt()}")
             append(" | EMA: $emaDirection")
@@ -299,9 +353,7 @@ object CandleAnalyzer {
             append(" | DETECTED: ${bars.size}")
             append(" | MOMENTUM: $greenMomentum/$redMomentum")
             append(" | GROUPS: $bullishGroups/$bearishGroups")
-            append(" | CONFLICT: $conflict")
-            if (oversizedCandle) append(" | HIGH VOLATILITY")
-            if (weakBody) append(" | WEAK BODY")
+            if (signal == "WAIT") append(" | REASON: $waitReason")
         }
 
         return result(signal, confidence, green, red, message)
@@ -310,6 +362,7 @@ object CandleAnalyzer {
     private fun colorType(color: Int): Int {
         val hsv = FloatArray(3)
         Color.colorToHSV(color, hsv)
+
         val hue = hsv[0]
         val saturation = hsv[1]
         val value = hsv[2]
@@ -365,19 +418,19 @@ object CandleAnalyzer {
 
                 val start = x
                 var end = x
+
                 while (end + 1 < w && active[end + 1]) end++
 
                 var groupLeft = start
                 var groupRight = end
 
-                if (groupLeft > 0 && columnCounts[type][groupLeft - 1] == 1) {
-                    groupLeft--
-                }
+                if (groupLeft > 0 &&
+                    columnCounts[type][groupLeft - 1] == 1
+                ) groupLeft--
+
                 if (groupRight + 1 < w &&
                     columnCounts[type][groupRight + 1] == 1
-                ) {
-                    groupRight++
-                }
+                ) groupRight++
 
                 if (groupRight - groupLeft + 1 in 1..22) {
                     groups.add(CandleColumn(type, groupLeft, groupRight))
@@ -416,7 +469,10 @@ object CandleAnalyzer {
                 var bodyTop = peakY
                 var bodyBottom = peakY
 
-                while (bodyTop > 0 && rows[bodyTop - 1] >= threshold) bodyTop--
+                while (bodyTop > 0 &&
+                    rows[bodyTop - 1] >= threshold
+                ) bodyTop--
+
                 while (bodyBottom < rows.lastIndex &&
                     rows[bodyBottom + 1] >= threshold
                 ) bodyBottom++
@@ -448,8 +504,12 @@ object CandleAnalyzer {
                         high = -absoluteHigh.toDouble(),
                         low = -absoluteLow.toDouble(),
                         body = (bodyBottom - bodyTop + 1).toDouble(),
-                        upperWick = max(0, absoluteBodyTop - absoluteHigh).toDouble(),
-                        lowerWick = max(0, absoluteLow - absoluteBodyBottom).toDouble(),
+                        upperWick = max(
+                            0, absoluteBodyTop - absoluteHigh
+                        ).toDouble(),
+                        lowerWick = max(
+                            0, absoluteLow - absoluteBodyBottom
+                        ).toDouble(),
                         centerX = left + (group.left + group.right) / 2
                     )
                 )
@@ -461,6 +521,7 @@ object CandleAnalyzer {
 
         for (bar in sorted) {
             val previous = unique.lastOrNull()
+
             if (previous != null &&
                 abs(previous.centerX - bar.centerX) <= 1 &&
                 previous.bullish == bar.bullish
@@ -479,15 +540,17 @@ object CandleAnalyzer {
     private fun detectPattern(a: Bar, b: Bar): Pattern {
         val body = b.body.coerceAtLeast(1.0)
 
-        if (b.body <= b.range * 0.12) return Pattern("DOJI", 0)
-
-        if (b.lowerWick >= body * 2 && b.upperWick <= body) {
-            return Pattern("HAMMER", 3)
+        if (b.body <= b.range * 0.12) {
+            return Pattern("DOJI", 0)
         }
 
-        if (b.upperWick >= body * 2 && b.lowerWick <= body) {
-            return Pattern("SHOOTING STAR", -3)
-        }
+        if (b.lowerWick >= body * 2 &&
+            b.upperWick <= body
+        ) return Pattern("HAMMER", 3)
+
+        if (b.upperWick >= body * 2 &&
+            b.lowerWick <= body
+        ) return Pattern("SHOOTING STAR", -3)
 
         if (b.bullish && !a.bullish &&
             b.open <= a.close && b.close >= a.open &&
@@ -499,18 +562,21 @@ object CandleAnalyzer {
             b.body > a.body * 0.9
         ) return Pattern("BEARISH ENGULFING", -5)
 
-        if (b.bullish && a.bullish && b.body > a.body * 1.5) {
-            return Pattern("STRONG BULLISH", 2)
-        }
+        if (b.bullish && a.bullish &&
+            b.body > a.body * 1.5
+        ) return Pattern("STRONG BULLISH", 2)
 
-        if (!b.bullish && !a.bullish && b.body > a.body * 1.5) {
-            return Pattern("STRONG BEARISH", -2)
-        }
+        if (!b.bullish && !a.bullish &&
+            b.body > a.body * 1.5
+        ) return Pattern("STRONG BEARISH", -2)
 
         return Pattern("NONE", 0)
     }
 
-    private fun findSwings(bars: List<Bar>, high: Boolean): List<Swing> {
+    private fun findSwings(
+        bars: List<Bar>,
+        high: Boolean
+    ): List<Swing> {
         val result = mutableListOf<Swing>()
         val radius = 2
 
@@ -519,9 +585,11 @@ object CandleAnalyzer {
 
             val valid = (1..radius).all { d ->
                 if (high) {
-                    price > bars[i - d].high && price > bars[i + d].high
+                    price > bars[i - d].high &&
+                        price > bars[i + d].high
                 } else {
-                    price < bars[i - d].low && price < bars[i + d].low
+                    price < bars[i - d].low &&
+                        price < bars[i + d].low
                 }
             }
 
@@ -533,12 +601,15 @@ object CandleAnalyzer {
 
     private fun ema(values: List<Double>, period: Int): Double {
         if (values.isEmpty()) return 0.0
+
         val multiplier = 2.0 / (period + 1)
         var value = values.first()
 
         for (i in 1 until values.size) {
-            value = values[i] * multiplier + value * (1.0 - multiplier)
+            value = values[i] * multiplier +
+                value * (1.0 - multiplier)
         }
+
         return value
     }
 
@@ -551,7 +622,8 @@ object CandleAnalyzer {
 
         for (i in closes.size - period until closes.size) {
             val change = closes[i] - closes[i - 1]
-            if (change > 0) gains += change else losses += abs(change)
+            if (change > 0) gains += change
+            else losses += abs(change)
         }
 
         val averageGain = gains / period
@@ -560,7 +632,8 @@ object CandleAnalyzer {
         return when {
             averageGain == 0.0 && averageLoss == 0.0 -> 50.0
             averageLoss == 0.0 -> 100.0
-            else -> 100.0 - (100.0 / (1.0 + averageGain / averageLoss))
+            else -> 100.0 -
+                (100.0 / (1.0 + averageGain / averageLoss))
         }
     }
 
