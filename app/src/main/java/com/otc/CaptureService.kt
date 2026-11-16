@@ -46,12 +46,19 @@ class CaptureService : Service() {
     private var firstAnalysisQueued = false
     private var analysisRunnable: Runnable? = null
 
+    @Volatile
+    private var lastValidTimerAt = 0L
+
+    @Volatile
+    private var chartNotDetectedSent = false
+
     companion object {
         private const val TAG = "OTCCandleAI"
         private const val NOTIFICATION_ID = 1
 
         private const val OCR_INTERVAL_MS = 1000L
         private const val ANALYSIS_DELAY_MS = 1200L
+        private const val CHART_TIMEOUT_MS = 8000L
 
         private const val ACTION_UPDATE =
             "com.otc.candleai.ANALYSIS_UPDATE"
@@ -72,7 +79,10 @@ class CaptureService : Service() {
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
             )
         } else {
-            startForeground(NOTIFICATION_ID, createNotification())
+            startForeground(
+                NOTIFICATION_ID,
+                createNotification()
+            )
         }
 
         if (projection != null) return START_NOT_STICKY
@@ -102,6 +112,16 @@ class CaptureService : Service() {
                 manager.getMediaProjection(resultCode, data)
 
             projection = currentProjection
+
+            // Reset all old analysis and timer states.
+            lastValidTimerAt = SystemClock.elapsedRealtime()
+            chartNotDetectedSent = false
+            previousSecondsRemaining = null
+            firstAnalysisQueued = false
+            lastOcrTime = 0L
+            pendingAnalysis.set(false)
+            ocrRunning.set(false)
+            frameRunning.set(false)
 
             val metrics = resources.displayMetrics
             val width = metrics.widthPixels
@@ -151,7 +171,10 @@ class CaptureService : Service() {
                 workerHandler
             )
 
-            Log.d(TAG, "Screen capture started: ${width}x${height}")
+            Log.d(
+                TAG,
+                "Screen capture started: ${width}x${height}"
+            )
 
         } catch (e: Exception) {
             Log.e(TAG, "Capture start failed", e)
@@ -162,10 +185,6 @@ class CaptureService : Service() {
         return START_NOT_STICKY
     }
 
-    /**
-     * Schedule analysis after the new candle has had time
-     * to appear on the chart.
-     */
     private fun scheduleAnalysis(reason: String) {
         val handler = workerHandler
 
@@ -206,6 +225,48 @@ class CaptureService : Service() {
         sendBroadcast(update)
     }
 
+    /**
+     * Clear old signal if the chart timer disappears.
+     */
+    private fun checkChartTimeout() {
+        val now = SystemClock.elapsedRealtime()
+
+        if (now - lastValidTimerAt < CHART_TIMEOUT_MS) {
+            return
+        }
+
+        if (chartNotDetectedSent) return
+
+        chartNotDetectedSent = true
+
+        analysisRunnable?.let {
+            workerHandler?.removeCallbacks(it)
+        }
+
+        analysisRunnable = null
+        pendingAnalysis.set(false)
+
+        previousSecondsRemaining = null
+        firstAnalysisQueued = false
+
+        val update = Intent(ACTION_UPDATE).apply {
+            setPackage(packageName)
+            putExtra("signal", "WAIT")
+            putExtra("confidence", 0)
+            putExtra(
+                "message",
+                "CHART NOT DETECTED | WAITING FOR CHART"
+            )
+            putExtra("greenCount", 0)
+            putExtra("redCount", 0)
+            putExtra("newMinuteAnalysis", true)
+        }
+
+        sendBroadcast(update)
+
+        Log.w(TAG, "Chart timer missing: old signal cleared")
+    }
+
     private fun analyzeFrame(
         imageReader: ImageReader,
         width: Int
@@ -244,7 +305,10 @@ class CaptureService : Service() {
 
             val now = SystemClock.elapsedRealtime()
 
-            // Read the chart countdown once per second.
+            // Clear stale signal if chart timer is missing.
+            checkChartTimeout()
+
+            // Read chart countdown once per second.
             if (
                 now - lastOcrTime >= OCR_INTERVAL_MS &&
                 ocrRunning.compareAndSet(false, true)
@@ -300,8 +364,6 @@ class CaptureService : Service() {
             val screenWidth = bitmap.width
             val screenHeight = bitmap.height
 
-            // Existing chart countdown crop.
-            // The lower trade-duration area is intended to be excluded.
             val left = (screenWidth * 0.60f).toInt()
             val top = (screenHeight * 0.48f).toInt()
             val right = (screenWidth * 0.82f).toInt()
@@ -343,8 +405,6 @@ class CaptureService : Service() {
             textRecognizer.process(inputImage)
                 .addOnSuccessListener { visionText ->
 
-                    // Accept only a complete MM:SS line.
-                    // This rejects HH:MM:SS such as 00:01:00.
                     val pattern = Regex(
                         """^(\d{1,2}):([0-5]\d)$"""
                     )
@@ -353,7 +413,6 @@ class CaptureService : Service() {
                     var detectedText: String? = null
 
                     for (block in visionText.textBlocks) {
-
                         for (line in block.lines) {
 
                             val bounds = line.boundingBox ?: continue
@@ -376,16 +435,19 @@ class CaptureService : Service() {
                                 .replace('o', '0')
                                 .replace('I', '1')
                                 .replace('l', '1')
-                                .replace(Regex("""\s*:\s*"""), ":")
+                                .replace(
+                                    Regex("""\s*:\s*"""),
+                                    ":"
+                                )
                                 .trim()
 
-                            // A valid timer line must contain one colon only.
                             if (normalized.count { it == ':' } != 1) {
                                 continue
                             }
 
-                            val match = pattern.matchEntire(normalized)
-                                ?: continue
+                            val match =
+                                pattern.matchEntire(normalized)
+                                    ?: continue
 
                             val minutes =
                                 match.groupValues[1].toIntOrNull()
@@ -407,6 +469,18 @@ class CaptureService : Service() {
 
                     if (remaining != null && detectedText != null) {
 
+                        // A valid timer means the chart is present.
+                        lastValidTimerAt =
+                            SystemClock.elapsedRealtime()
+
+                        if (chartNotDetectedSent) {
+                            chartNotDetectedSent = false
+                            previousSecondsRemaining = null
+                            firstAnalysisQueued = false
+
+                            Log.d(TAG, "Chart detected again")
+                        }
+
                         val previous = previousSecondsRemaining
 
                         if (previous == null) {
@@ -421,8 +495,6 @@ class CaptureService : Service() {
 
                         } else {
 
-                            // Detect a new minute after the countdown
-                            // approaches zero and resets near one minute.
                             val rollover =
                                 previous <= 10 && remaining >= 50
 
