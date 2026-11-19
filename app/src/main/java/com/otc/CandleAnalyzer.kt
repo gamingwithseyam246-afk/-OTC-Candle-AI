@@ -75,7 +75,7 @@ object CandleAnalyzer {
             )
         }
 
-        // Rightmost candle is treated as the live candle.
+        // Rightmost candle is treated as live.
         val complete = bars.dropLast(1)
 
         if (complete.size < 10) {
@@ -117,36 +117,88 @@ object CandleAnalyzer {
         val greenMomentum = lastSix.count { it.bullish }
         val redMomentum = lastSix.size - greenMomentum
 
+        // ─────────────────────────────
+        // RECENT REVERSAL PROTECTION
+        // ─────────────────────────────
+
+        val lastThree = complete.takeLast(3)
+
+        val recentRising = lastThree.zipWithNext()
+            .count { it.second.close > it.first.close }
+
+        val recentFalling = lastThree.zipWithNext()
+            .count { it.second.close < it.first.close }
+
+        val recentMove = if (lastThree.size >= 2) {
+            lastThree.last().close -
+                lastThree.first().close
+        } else {
+            0.0
+        }
+
+        // Recent UP movement against old DOWN trend
+        val recentBullishReversal =
+            lastThree.size == 3 &&
+            recentRising >= 2 &&
+            lastThree.count { it.bullish } >= 2 &&
+            recentMove > averageRange * 0.35
+
+        // Recent DOWN movement against old UP trend
+        val recentBearishReversal =
+            lastThree.size == 3 &&
+            recentFalling >= 2 &&
+            lastThree.count { !it.bullish } >= 2 &&
+            recentMove < -averageRange * 0.35
+
+        // ─────────────────────────────
+        // MARKET STRUCTURE
+        // ─────────────────────────────
+
         val highs = findSwings(complete, true)
         val lows = findSwings(complete, false)
 
         val higherHighs = highs.size >= 2 &&
-            highs.last().price > highs[highs.lastIndex - 1].price
+            highs.last().price >
+            highs[highs.lastIndex - 1].price
 
         val lowerHighs = highs.size >= 2 &&
-            highs.last().price < highs[highs.lastIndex - 1].price
+            highs.last().price <
+            highs[highs.lastIndex - 1].price
 
         val higherLows = lows.size >= 2 &&
-            lows.last().price > lows[lows.lastIndex - 1].price
+            lows.last().price >
+            lows[lows.lastIndex - 1].price
 
         val lowerLows = lows.size >= 2 &&
-            lows.last().price < lows[lows.lastIndex - 1].price
+            lows.last().price <
+            lows[lows.lastIndex - 1].price
 
-        val bullishStructure = higherHighs && higherLows
-        val bearishStructure = lowerHighs && lowerLows
+        val bullishStructure =
+            higherHighs && higherLows
+
+        val bearishStructure =
+            lowerHighs && lowerLows
 
         val trend = when {
+
             bullishStructure -> "UPTREND"
+
             bearishStructure -> "DOWNTREND"
 
             priceMove > averageRange * 0.7 &&
-                risingCloses >= 5 -> "POSSIBLE UPTREND"
+                risingCloses >= 5 ->
+                "POSSIBLE UPTREND"
 
             priceMove < -averageRange * 0.7 &&
-                fallingCloses >= 5 -> "POSSIBLE DOWNTREND"
+                fallingCloses >= 5 ->
+                "POSSIBLE DOWNTREND"
 
             else -> "SIDEWAYS"
         }
+
+        // ─────────────────────────────
+        // SUPPORT / RESISTANCE
+        // ─────────────────────────────
 
         val support = lows.lastOrNull()?.price
         val resistance = highs.lastOrNull()?.price
@@ -168,10 +220,16 @@ object CandleAnalyzer {
             last.close < resistance
 
         val nearSupport = support != null &&
-            abs(last.low - support) <= averageRange * 0.8
+            abs(last.low - support) <=
+            averageRange * 0.8
 
         val nearResistance = resistance != null &&
-            abs(last.high - resistance) <= averageRange * 0.8
+            abs(last.high - resistance) <=
+            averageRange * 0.8
+
+        // ─────────────────────────────
+        // WICK ANALYSIS
+        // ─────────────────────────────
 
         val bullishWick =
             last.lowerWick >= last.body * 1.5 &&
@@ -181,11 +239,17 @@ object CandleAnalyzer {
             last.upperWick >= last.body * 1.5 &&
             last.upperWick > last.lowerWick * 1.2
 
-        // Determine recent trend before evaluating patterns.
-        val priorBars = complete.dropLast(1).takeLast(5)
+        // ─────────────────────────────
+        // PATTERN DETECTION
+        // ─────────────────────────────
+
+        val priorBars = complete
+            .dropLast(1)
+            .takeLast(5)
 
         val priorMove = if (priorBars.size >= 2) {
-            priorBars.last().close - priorBars.first().close
+            priorBars.last().close -
+                priorBars.first().close
         } else {
             0.0
         }
@@ -200,6 +264,10 @@ object CandleAnalyzer {
             priorUptrend
         )
 
+        // ─────────────────────────────
+        // MOMENTUM
+        // ─────────────────────────────
+
         val bullishMomentum =
             greenMomentum >= 4 &&
             risingCloses >= 4 &&
@@ -210,6 +278,10 @@ object CandleAnalyzer {
             fallingCloses >= 4 &&
             priceMove < -averageRange * 0.5
 
+        // ─────────────────────────────
+        // EMA
+        // ─────────────────────────────
+
         val closes = complete.map { it.close }
 
         val ema9 = ema(closes, 9)
@@ -218,11 +290,21 @@ object CandleAnalyzer {
         val emaBullish = ema9 > ema20
         val emaBearish = ema9 < ema20
 
+        // ─────────────────────────────
+        // PATTERN EVIDENCE
+        // ─────────────────────────────
+
         val bullishPattern =
-            pattern.direction > 0 && pattern.strength > 0
+            pattern.direction > 0 &&
+            pattern.strength > 0
 
         val bearishPattern =
-            pattern.direction < 0 && pattern.strength > 0
+            pattern.direction < 0 &&
+            pattern.strength > 0
+
+        // ─────────────────────────────
+        // EVIDENCE SCORE
+        // ─────────────────────────────
 
         val bullishEvidence =
             (if (bullishStructure) 2 else 0) +
@@ -242,28 +324,38 @@ object CandleAnalyzer {
             (if (bearishWick && nearResistance) 1 else 0) +
             (if (bearishPattern) pattern.strength else 0)
 
+        // ─────────────────────────────
+        // FILTERS
+        // ─────────────────────────────
+
         val oversizedCandle =
             last.range > averageRange * 2.0
 
         val weakBody =
             last.bodyRatio < 0.20
 
-        val dojiDetected = pattern.name == "DOJI"
+        val dojiDetected =
+            pattern.name == "DOJI"
 
         val strongBullishOpposition =
             bearishBOS ||
             bearishSweep ||
-            (bearishMomentum && bearishEvidence >= 5) ||
+            (bearishMomentum &&
+                bearishEvidence >= 5) ||
             (bearishWick && nearResistance)
 
         val strongBearishOpposition =
             bullishBOS ||
             bullishSweep ||
-            (bullishMomentum && bullishEvidence >= 5) ||
+            (bullishMomentum &&
+                bullishEvidence >= 5) ||
             (bullishWick && nearSupport)
 
-        val blockedUp = nearResistance && !bullishBOS
-        val blockedDown = nearSupport && !bearishBOS
+        val blockedUp =
+            nearResistance && !bullishBOS
+
+        val blockedDown =
+            nearSupport && !bearishBOS
 
         val lastStrongBearish =
             !last.bullish &&
@@ -275,77 +367,138 @@ object CandleAnalyzer {
             last.bodyRatio >= 0.55 &&
             last.body >= averageBody * 1.3
 
+        // ─────────────────────────────
+        // FINAL SIGNAL
+        // ─────────────────────────────
+
         val signal = when {
 
-            oversizedCandle -> "WAIT"
+            oversizedCandle ->
+                "WAIT"
 
-            weakBody -> "WAIT"
+            weakBody ->
+                "WAIT"
 
             dojiDetected &&
                 !bullishBOS &&
-                !bearishBOS -> "WAIT"
+                !bearishBOS ->
+                "WAIT"
+
+            // Block DOWN when recent UP reversal appears.
+            recentBullishReversal ->
+                "WAIT"
+
+            // Block UP when recent DOWN reversal appears.
+            recentBearishReversal ->
+                "WAIT"
 
             bullishEvidence >= 6 &&
                 bullishEvidence >= bearishEvidence + 3 &&
                 bullishMomentum &&
                 !strongBullishOpposition &&
                 !blockedUp &&
-                !lastStrongBearish -> "UP"
+                !lastStrongBearish ->
+                "UP"
 
             bearishEvidence >= 6 &&
                 bearishEvidence >= bullishEvidence + 3 &&
                 bearishMomentum &&
                 !strongBearishOpposition &&
                 !blockedDown &&
-                !lastStrongBullish -> "DOWN"
+                !lastStrongBullish ->
+                "DOWN"
 
-            else -> "WAIT"
+            else ->
+                "WAIT"
         }
 
+        // ─────────────────────────────
+        // DISPLAY INFORMATION
+        // ─────────────────────────────
+
         val structure = when {
+
             bullishStructure -> "HH + HL"
+
             bearishStructure -> "LH + LL"
+
             else -> "MIXED"
         }
 
         val bos = when {
+
             bullishBOS -> "BULLISH BOS"
+
             bearishBOS -> "BEARISH BOS"
+
             else -> "NO FRESH BOS"
         }
 
         val sweep = when {
+
             bullishSweep -> "BULLISH SWEEP"
+
             bearishSweep -> "BEARISH SWEEP"
+
             else -> "NO SWEEP"
         }
 
         val wick = when {
+
             bullishWick -> "LOWER WICK"
+
             bearishWick -> "UPPER WICK"
+
             else -> "NO STRONG WICK"
         }
 
         val level = when {
+
             nearSupport -> "NEAR SUPPORT"
+
             nearResistance -> "NEAR RESISTANCE"
+
             else -> "CLEAR"
         }
 
         val live = bars.last()
 
         val liveDirection =
-            if (live.bullish) "UP FORMING" else "DOWN FORMING"
+            if (live.bullish) {
+                "UP FORMING"
+            } else {
+                "DOWN FORMING"
+            }
+
+        // ─────────────────────────────
+        // WAIT REASON
+        // ─────────────────────────────
 
         val reason = when {
-            oversizedCandle -> "HIGH VOLATILITY"
-            weakBody -> "WEAK BODY"
-            dojiDetected -> "DOJI / INDECISION"
 
-            blockedUp && bullishEvidence > bearishEvidence ->
+            recentBullishReversal &&
+                bearishEvidence > bullishEvidence ->
+                "RECENT UP REVERSAL - BLOCK DOWN"
+
+            recentBearishReversal &&
+                bullishEvidence > bearishEvidence ->
+                "RECENT DOWN REVERSAL - BLOCK UP"
+
+            oversizedCandle ->
+                "HIGH VOLATILITY"
+
+            weakBody ->
+                "WEAK BODY"
+
+            dojiDetected ->
+                "DOJI / INDECISION"
+
+            blockedUp &&
+                bullishEvidence > bearishEvidence ->
                 "RESISTANCE BLOCK"
 
-            blockedDown && bearishEvidence > bullishEvidence ->
+            blockedDown &&
+                bearishEvidence > bullishEvidence ->
                 "SUPPORT BLOCK"
 
             strongBullishOpposition &&
@@ -356,28 +509,62 @@ object CandleAnalyzer {
                 bearishEvidence > bullishEvidence ->
                 "BULLISH CONFLICT"
 
-            else -> "NO CLEAR DIRECTION"
+            else ->
+                "NO CLEAR DIRECTION"
         }
 
+        // ─────────────────────────────
+        // MESSAGE
+        // ─────────────────────────────
+
         val message = buildString {
+
             append("NEXT: $signal")
+
             append(" | CURRENT: $liveDirection")
+
             append(" | TREND: $trend")
+
             append(" | STRUCTURE: $structure")
+
             append(" | $bos")
+
             append(" | $sweep")
+
             append(" | $wick")
+
             append(" | LEVEL: $level")
+
             append(" | PATTERN: ${pattern.name}")
 
             if (pattern.strength > 0) {
                 append(" | PATTERN SCORE: ${pattern.strength}")
             }
 
+            append(" | REVERSAL: ")
+
+            append(
+                when {
+
+                    recentBullishReversal ->
+                        "UP REVERSAL"
+
+                    recentBearishReversal ->
+                        "DOWN REVERSAL"
+
+                    else ->
+                        "NONE"
+                }
+            )
+
             append(" | GREEN: $green")
+
             append(" | RED: $red")
+
             append(" | COMPLETE: ${complete.size}")
+
             append(" | MOMENTUM: $greenMomentum/$redMomentum")
+
             append(" | EVIDENCE: $bullishEvidence/$bearishEvidence")
 
             if (signal == "WAIT") {
@@ -385,7 +572,7 @@ object CandleAnalyzer {
             }
         }
 
-        // Retained for compatibility with the existing UI.
+        // Retained for compatibility with existing UI.
         val confidence = 0
 
         return result(
@@ -397,27 +584,47 @@ object CandleAnalyzer {
         )
     }
 
+    // ─────────────────────────────────────
+    // COLOR DETECTION
+    // ─────────────────────────────────────
+
     private fun colorType(color: Int): Int {
 
         val hsv = FloatArray(3)
+
         Color.colorToHSV(color, hsv)
 
         val hue = hsv[0]
         val saturation = hsv[1]
         val value = hsv[2]
 
-        if (value < 0.20f || saturation < 0.30f) {
+        if (
+            value < 0.20f ||
+            saturation < 0.30f
+        ) {
             return 0
         }
 
         return when {
-            hue in 65f..175f -> 1
-            hue <= 18f || hue >= 342f -> 2
-            else -> 0
+
+            hue in 65f..175f ->
+                1
+
+            hue <= 18f || hue >= 342f ->
+                2
+
+            else ->
+                0
         }
     }
 
-    private fun detectCandles(bitmap: Bitmap): List<Bar> {
+    // ─────────────────────────────────────
+    // CANDLE DETECTION
+    // ─────────────────────────────────────
+
+    private fun detectCandles(
+        bitmap: Bitmap
+    ): List<Bar> {
 
         val screenW = bitmap.width
         val screenH = bitmap.height
@@ -430,16 +637,24 @@ object CandleAnalyzer {
         val w = right - left
         val h = bottom - top
 
-        if (w < 20 || h < 20) return emptyList()
+        if (w < 20 || h < 20) {
+            return emptyList()
+        }
 
         val types = ByteArray(w * h)
-        val columnCounts = Array(3) { IntArray(w) }
+        val columnCounts = Array(3) {
+            IntArray(w)
+        }
 
         for (y in 0 until h) {
+
             for (x in 0 until w) {
 
                 val type = colorType(
-                    bitmap.getPixel(left + x, top + y)
+                    bitmap.getPixel(
+                        left + x,
+                        top + y
+                    )
                 )
 
                 types[y * w + x] = type.toByte()
@@ -457,10 +672,15 @@ object CandleAnalyzer {
             val peakCount =
                 columnCounts[type].maxOrNull() ?: 0
 
-            if (peakCount < 2) continue
+            if (peakCount < 2) {
+                continue
+            }
 
             val bodyThreshold =
-                max(2, (peakCount * 0.42).roundToInt())
+                max(
+                    2,
+                    (peakCount * 0.42).roundToInt()
+                )
 
             val bodyColumns = BooleanArray(w) { x ->
                 columnCounts[type][x] >= bodyThreshold
@@ -490,6 +710,7 @@ object CandleAnalyzer {
                 val width = end - start + 1
 
                 if (width in 1..18) {
+
                     bodies.add(
                         CandleBody(
                             type,
@@ -503,7 +724,9 @@ object CandleAnalyzer {
                 x = end + 1
             }
 
-            if (bodies.isEmpty()) continue
+            if (bodies.isEmpty()) {
+                continue
+            }
 
             for (i in bodies.indices) {
 
@@ -512,19 +735,32 @@ object CandleAnalyzer {
                 val regionLeft = if (i == 0) {
                     0
                 } else {
-                    (bodies[i - 1].center + body.center) / 2 + 1
+                    (bodies[i - 1].center +
+                        body.center) / 2 + 1
                 }
 
-                val regionRight = if (i == bodies.lastIndex) {
+                val regionRight = if (
+                    i == bodies.lastIndex
+                ) {
                     w - 1
                 } else {
-                    (body.center + bodies[i + 1].center) / 2
+                    (body.center +
+                        bodies[i + 1].center) / 2
                 }
 
-                val startX = max(regionLeft, body.left)
-                val endX = min(regionRight, body.right)
+                val startX = max(
+                    regionLeft,
+                    body.left
+                )
 
-                if (endX < startX) continue
+                val endX = min(
+                    regionRight,
+                    body.right
+                )
+
+                if (endX < startX) {
+                    continue
+                }
 
                 val rowCounts = IntArray(h)
 
@@ -536,24 +772,45 @@ object CandleAnalyzer {
 
                     for (cy in 0 until h) {
 
-                        if (types[cy * w + cx].toInt() == type) {
+                        if (
+                            types[cy * w + cx]
+                                .toInt() == type
+                        ) {
+
                             rowCounts[cy]++
+
                             totalPixels++
 
                             minY = min(minY, cy)
+
                             maxY = max(maxY, cy)
                         }
                     }
                 }
 
-                if (maxY < 0 || totalPixels < 4) continue
-                if (maxY - minY + 1 < 4) continue
+                if (
+                    maxY < 0 ||
+                    totalPixels < 4
+                ) {
+                    continue
+                }
 
-                val peak = rowCounts.maxOrNull() ?: 0
-                if (peak < 1) continue
+                if (maxY - minY + 1 < 4) {
+                    continue
+                }
+
+                val peak =
+                    rowCounts.maxOrNull() ?: 0
+
+                if (peak < 1) {
+                    continue
+                }
 
                 val threshold =
-                    max(1, (peak * 0.50).roundToInt())
+                    max(
+                        1,
+                        (peak * 0.50).roundToInt()
+                    )
 
                 var bodyTop = -1
                 var bodyBottom = -1
@@ -575,8 +832,11 @@ object CandleAnalyzer {
                     } else {
 
                         if (runLength > bestRun) {
+
                             bestRun = runLength
+
                             bodyTop = runStart
+
                             bodyBottom = row - 1
                         }
 
@@ -586,11 +846,18 @@ object CandleAnalyzer {
                 }
 
                 if (runLength > bestRun) {
+
                     bodyTop = runStart
+
                     bodyBottom = maxY
                 }
 
-                if (bodyTop < 0 || bodyBottom < bodyTop) continue
+                if (
+                    bodyTop < 0 ||
+                    bodyBottom < bodyTop
+                ) {
+                    continue
+                }
 
                 val absoluteHigh = minY + top
                 val absoluteLow = maxY + top
@@ -604,10 +871,15 @@ object CandleAnalyzer {
                 val close: Double
 
                 if (bullish) {
+
                     open = -absoluteBodyBottom.toDouble()
+
                     close = -absoluteBodyTop.toDouble()
+
                 } else {
+
                     open = -absoluteBodyTop.toDouble()
+
                     close = -absoluteBodyBottom.toDouble()
                 }
 
@@ -626,11 +898,13 @@ object CandleAnalyzer {
                             ).toDouble(),
                         upperWick = max(
                             0,
-                            absoluteBodyTop - absoluteHigh
+                            absoluteBodyTop -
+                                absoluteHigh
                         ).toDouble(),
                         lowerWick = max(
                             0,
-                            absoluteLow - absoluteBodyBottom
+                            absoluteLow -
+                                absoluteBodyBottom
                         ).toDouble(),
                         centerX = centerX
                     )
@@ -644,7 +918,7 @@ object CandleAnalyzer {
     }
 
     // ─────────────────────────────────────
-    // CANDLE PATTERN DETECTION
+    // CANDLE PATTERNS
     // ─────────────────────────────────────
 
     private fun detectPattern(
@@ -655,17 +929,24 @@ object CandleAnalyzer {
     ): Pattern {
 
         val body = b.body.coerceAtLeast(1.0)
+
         val range = b.range
 
         val upper = b.upperWick
+
         val lower = b.lowerWick
 
-        // Doji: opening and closing price are very close.
+        // DOJI
         if (b.bodyRatio <= 0.12) {
-            return Pattern("DOJI", 0, 0)
+
+            return Pattern(
+                "DOJI",
+                0,
+                0
+            )
         }
 
-        // Bullish Engulfing
+        // BULLISH ENGULFING
         if (
             b.bullish &&
             !a.bullish &&
@@ -673,6 +954,7 @@ object CandleAnalyzer {
             b.close >= a.open &&
             b.body >= a.body * 0.90
         ) {
+
             return Pattern(
                 "BULLISH ENGULFING",
                 1,
@@ -680,7 +962,7 @@ object CandleAnalyzer {
             )
         }
 
-        // Bearish Engulfing
+        // BEARISH ENGULFING
         if (
             !b.bullish &&
             a.bullish &&
@@ -688,6 +970,7 @@ object CandleAnalyzer {
             b.close <= a.open &&
             b.body >= a.body * 0.90
         ) {
+
             return Pattern(
                 "BEARISH ENGULFING",
                 -1,
@@ -695,14 +978,19 @@ object CandleAnalyzer {
             )
         }
 
-        // Hammer: long lower wick and small upper wick.
+        // HAMMER SHAPE
         val hammerShape =
             b.bodyRatio <= 0.35 &&
             lower >= body * 2.0 &&
             upper <= body * 0.70 &&
-            (b.high - max(b.open, b.close)) <= range * 0.40
+            (b.high - max(b.open, b.close)) <=
+                range * 0.40
 
-        if (hammerShape && priorDowntrend) {
+        if (
+            hammerShape &&
+            priorDowntrend
+        ) {
+
             return Pattern(
                 "HAMMER",
                 1,
@@ -710,13 +998,17 @@ object CandleAnalyzer {
             )
         }
 
-        // Inverted Hammer: long upper wick after a downtrend.
+        // INVERTED HAMMER
         val invertedHammerShape =
             b.bodyRatio <= 0.35 &&
             upper >= body * 2.0 &&
             lower <= body * 0.70
 
-        if (invertedHammerShape && priorDowntrend) {
+        if (
+            invertedHammerShape &&
+            priorDowntrend
+        ) {
+
             return Pattern(
                 "INVERTED HAMMER",
                 1,
@@ -724,8 +1016,12 @@ object CandleAnalyzer {
             )
         }
 
-        // Shooting Star: long upper wick after an uptrend.
-        if (invertedHammerShape && priorUptrend) {
+        // SHOOTING STAR
+        if (
+            invertedHammerShape &&
+            priorUptrend
+        ) {
+
             return Pattern(
                 "SHOOTING STAR",
                 -1,
@@ -733,8 +1029,12 @@ object CandleAnalyzer {
             )
         }
 
-        // Hanging Man: hammer-like candle after an uptrend.
-        if (hammerShape && priorUptrend) {
+        // HANGING MAN
+        if (
+            hammerShape &&
+            priorUptrend
+        ) {
+
             return Pattern(
                 "HANGING MAN",
                 -1,
@@ -742,8 +1042,16 @@ object CandleAnalyzer {
             )
         }
 
-        return Pattern("NONE", 0, 0)
+        return Pattern(
+            "NONE",
+            0,
+            0
+        )
     }
+
+    // ─────────────────────────────────────
+    // SWING DETECTION
+    // ─────────────────────────────────────
 
     private fun findSwings(
         bars: List<Bar>,
@@ -751,49 +1059,77 @@ object CandleAnalyzer {
     ): List<Swing> {
 
         val result = mutableListOf<Swing>()
+
         val radius = 2
 
-        for (i in radius until bars.size - radius) {
+        for (
+            i in radius until
+                bars.size - radius
+        ) {
 
             val price =
-                if (high) bars[i].high else bars[i].low
+                if (high) {
+                    bars[i].high
+                } else {
+                    bars[i].low
+                }
 
             val valid = (1..radius).all { d ->
 
                 if (high) {
+
                     price > bars[i - d].high &&
                         price > bars[i + d].high
+
                 } else {
+
                     price < bars[i - d].low &&
                         price < bars[i + d].low
                 }
             }
 
             if (valid) {
-                result.add(Swing(i, price))
+
+                result.add(
+                    Swing(i, price)
+                )
             }
         }
 
         return result
     }
 
+    // ─────────────────────────────────────
+    // EMA
+    // ─────────────────────────────────────
+
     private fun ema(
         values: List<Double>,
         period: Int
     ): Double {
 
-        if (values.isEmpty()) return 0.0
+        if (values.isEmpty()) {
+            return 0.0
+        }
 
-        val multiplier = 2.0 / (period + 1)
+        val multiplier =
+            2.0 / (period + 1)
+
         var value = values.first()
 
         for (i in 1 until values.size) {
-            value = values[i] * multiplier +
-                value * (1.0 - multiplier)
+
+            value =
+                values[i] * multiplier +
+                    value * (1.0 - multiplier)
         }
 
         return value
     }
+
+    // ─────────────────────────────────────
+    // RESULT
+    // ─────────────────────────────────────
 
     private fun result(
         signal: String,
